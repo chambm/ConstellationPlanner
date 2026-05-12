@@ -1,0 +1,30 @@
+# Build outputs
+bin/
+obj/
+out/
+[Dd]ebug/
+[Rr]elease/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Tool/test outputs
+*.png
+!docs/**/*.png
+*.html
+!docs/**/*.html
+TestResults/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Loose root artifacts not part of the shipped source tree
+coastline_raw.json
+coverage_24h.gif
+fetch_review_comments.py
+gui_screenshot.png

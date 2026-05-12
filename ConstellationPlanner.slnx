@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ConstellationPlanner.Cli/ConstellationPlanner.Cli.csproj" />
+  <Project Path="ConstellationPlanner.Core/ConstellationPlanner.Core.csproj" />
+  <Project Path="ConstellationPlanner.Gui/ConstellationPlanner.Gui.csproj" />
+  <Project Path="ConstellationPlanner.Ksp/ConstellationPlanner.Ksp.csproj" />
+</Solution>

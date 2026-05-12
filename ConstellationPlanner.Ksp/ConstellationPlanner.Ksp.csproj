@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\ConstellationPlanner.Core\ConstellationPlanner.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>ConstellationPlanner.Ksp</AssemblyName>
+    <!-- KSP refs (Assembly-CSharp.dll, UnityEngine.*.dll) added via <Reference> when this project is wired up.
+         For now this just confirms the framework target. -->
+  </PropertyGroup>
+
+</Project>
