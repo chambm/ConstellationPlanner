@@ -3,10 +3,17 @@ name: Build & release GUI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 # PR pushes don't trigger this workflow — only direct pushes to main do. PRs that
 # merge will trigger one release on the resulting main commit.
+# Doc-only changes (README / docs/) skip the build via paths-ignore — no point
+# spinning up a 2-3 minute Windows runner just to repackage the same binaries.
+# `workflow_dispatch` stays available for manual rebuilds without a code change.
 
 permissions:
   contents: write

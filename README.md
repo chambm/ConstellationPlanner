@@ -6,6 +6,8 @@ so the link budget is byte-identical to what RA computes in-game. Connection
 evaluation mirrors the algorithm in [Skopos](https://github.com/eggrobin/Skopos)'s
 `Routing.FindChannels`.
 
+![GUI screenshot showing a 9-sat Molniya constellation with figure-8 ground tracks, targeted ISLs, and a moscow→vladivostok relay path](docs/gui_screenshot.png)
+
 ## What it does
 
 - **Walker / Molniya / Tundra / Custom** constellations with full classical orbital
