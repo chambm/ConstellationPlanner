@@ -1,0 +1,83 @@
+name: Build & release GUI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# PR pushes don't trigger this workflow — only direct pushes to main do. PRs that
+# merge will trigger one release on the resulting main commit.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # softprops/action-gh-release needs full history for release notes
+
+      - name: Set up .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve build tag
+        id: ver
+        shell: pwsh
+        run: |
+          $shaShort = "${{ github.sha }}".Substring(0, 7)
+          $tag = "build-${{ github.run_number }}"
+          "tag=$tag"            | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "shaShort=$shaShort"  | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Tag: $tag · SHA: $shaShort"
+
+      - name: Restore
+        run: dotnet restore ConstellationPlanner.Gui/ConstellationPlanner.Gui.csproj
+
+      - name: Publish — self-contained (bundles .NET 8 runtime)
+        run: >
+          dotnet publish ConstellationPlanner.Gui/ConstellationPlanner.Gui.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishReadyToRun=true
+          -o publish/gui-self-contained
+
+      - name: Publish — framework-dependent (requires .NET 8 runtime on the user's machine)
+        run: >
+          dotnet publish ConstellationPlanner.Gui/ConstellationPlanner.Gui.csproj
+          -c Release -r win-x64 --self-contained false
+          -o publish/gui-framework
+
+      - name: Stage and zip both flavors
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          function Stage($flavor, $publishDir) {
+            $folder = "ConstellationPlanner-Gui-$tag-win-x64-$flavor"
+            $zip    = "$folder.zip"
+            New-Item -ItemType Directory -Path "stage/$folder" | Out-Null
+            Copy-Item -Recurse "$publishDir/*" "stage/$folder/"
+            Copy-Item README.md "stage/$folder/"
+            Compress-Archive -Path "stage/$folder" -DestinationPath $zip
+            $sizeMB = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+            Write-Host "Built $zip ($sizeMB MB)"
+          }
+          Stage "self-contained" "publish/gui-self-contained"
+          Stage "framework"      "publish/gui-framework"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Build ${{ github.run_number }} (${{ steps.ver.outputs.shaShort }})
+          files: ConstellationPlanner-Gui-*.zip
+          generate_release_notes: true
+          body: |
+            **Two flavors** — pick whichever fits:
+
+            - `…-self-contained.zip` (~80 MB): bundles the .NET 8 runtime. Extract and run `ConstellationPlanner.Gui.exe`. No .NET install required.
+            - `…-framework.zip` (~5 MB): requires .NET 8 (or newer) Desktop Runtime installed. Download from <https://dotnet.microsoft.com/download/dotnet/8.0> if needed.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
