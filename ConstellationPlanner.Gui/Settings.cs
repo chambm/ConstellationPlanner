@@ -6,6 +6,11 @@ namespace ConstellationPlanner.Gui;
 /// <c>%LOCALAPPDATA%\ConstellationPlanner\settings.json</c> on close, reloaded on launch.</summary>
 public sealed class GuiSettings
 {
+    /// <summary>Full path to Skopos's telecom.cfg if the default Steam location doesn't apply
+    /// (non-default install, Linux distro install, etc.). Empty string = use Steam default.
+    /// Set by the GUI's "browse for telecom.cfg" flow in the connection dropdown.</summary>
+    public string SkoposCfgPath { get; set; } = "";
+
     // Constellation
     public string OrbitType { get; set; } = "WalkerCircular"; // WalkerCircular / Molniya / Tundra / Custom
     /// <summary>Perigee altitude (km) — used as plain "altitude" in WalkerCircular mode.</summary>

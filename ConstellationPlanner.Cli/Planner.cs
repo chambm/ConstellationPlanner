@@ -587,17 +587,60 @@ public static class Planner
         get { EnsureLoaded(); return _connectionsCache!; }
     }
 
+    /// <summary>Default Steam install path for KSP — used when no user override is set. The
+    /// GUI can call <see cref="ReloadSkoposCfg"/> to point at a different telecom.cfg location
+    /// (e.g., a non-default install, or KSP installed via a Linux distro's package manager).</summary>
+    const string DefaultGameDataRoot = @"C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program\GameData";
+
+    /// <summary>User-overridden full path to Skopos's telecom.cfg. When set, takes precedence
+    /// over the Steam default. The GameData root is derived as that file's grandparent dir, so
+    /// RealAntennas's RealSolarSystem.cfg is looked up alongside.</summary>
+    static string? _userSkoposCfgPath;
+
+    /// <summary>Tell the planner to load station/connection data from a user-chosen telecom.cfg
+    /// instead of the Steam default. Invalidates the cache so the next <see cref="LoadStations"/>
+    /// re-parses. The GUI invokes this when the user picks a file from the connection
+    /// dropdown's "browse for telecom.cfg" entry.</summary>
+    public static void ReloadSkoposCfg(string telecomCfgPath)
+    {
+        lock (_stationsLock)
+        {
+            _userSkoposCfgPath = telecomCfgPath;
+            _stationsCache = null;
+            _catalogCache = null;
+            _connectionsCache = null;
+        }
+    }
+
     static void EnsureLoaded()
     {
         if (_stationsCache != null && _catalogCache != null && _connectionsCache != null) return;
         lock (_stationsLock)
         {
             if (_stationsCache != null && _catalogCache != null && _connectionsCache != null) return;
-            const string GameDataRoot = @"C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program\GameData";
+
+            // Resolve cfg paths: user override (if set + file exists) takes precedence,
+            // otherwise fall back to the Steam default. GameData root for RA is derived from
+            // the chosen telecom.cfg's grandparent (…/GameData/Skopos/telecom.cfg → …/GameData).
+            string skoposCfg;
+            string raCfg;
+            if (!string.IsNullOrEmpty(_userSkoposCfgPath) && File.Exists(_userSkoposCfgPath))
+            {
+                skoposCfg = _userSkoposCfgPath!;
+                string? gameData = Path.GetDirectoryName(Path.GetDirectoryName(skoposCfg));
+                raCfg = gameData != null
+                    ? Path.Combine(gameData, "RealAntennas", "PlanetPacks", "RealSolarSystem.cfg")
+                    : "";
+            }
+            else
+            {
+                skoposCfg = Path.Combine(DefaultGameDataRoot, "Skopos", "telecom.cfg");
+                raCfg = Path.Combine(DefaultGameDataRoot, "RealAntennas", "PlanetPacks", "RealSolarSystem.cfg");
+            }
+
             var catalog = new StationAntennaCatalog();
             var s = new List<GroundStation>();
-            s.AddRange(StationLoader.LoadRATracking(Path.Combine(GameDataRoot, "RealAntennas", "PlanetPacks", "RealSolarSystem.cfg")));
-            string skoposCfg = Path.Combine(GameDataRoot, "Skopos", "telecom.cfg");
+            s.AddRange(StationLoader.LoadRATracking(raCfg));
             s.AddRange(StationLoader.LoadSkoposTelecom(skoposCfg, catalog));
             if (s.Count == 0)
             {

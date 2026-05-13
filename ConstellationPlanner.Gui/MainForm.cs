@@ -43,11 +43,17 @@ public partial class MainForm : Form
     {
         InitializeComponent();
 
+        // Load settings BEFORE populating catalogs so a user-overridden Skopos telecom.cfg path
+        // takes effect on the first station/connection load — otherwise the dropdowns would have
+        // already been filled from the wrong cfg (or fallback dummies) before settings applied.
+        _settings = GuiSettings.Load();
+        if (!string.IsNullOrEmpty(_settings.SkoposCfgPath))
+            Planner.ReloadSkoposCfg(_settings.SkoposCfgPath);
+
         // Catalog-driven items can't go in the designer file (they require LINQ / runtime
         // catalog enumeration); populate them here, before we apply persisted settings.
         PopulateCatalogs();
 
-        _settings = GuiSettings.Load();
         ApplyWindowSettings(_settings);
         KeyDown += OnKeyDown;
         FormClosing += OnFormClosing;
@@ -129,14 +135,7 @@ public partial class MainForm : Form
                 _pathTo.Items.Add(st.Name);
             }
 
-            // Populate Skopos connection dropdown — one entry per (connection × rx) pair so
-            // multi-rx connections (e.g. l0_andover_europe with rx=goonhilly + rx=pleumeur)
-            // show as two selectable rows the user can independently test.
-            _skoposConnection.Items.Add("(manual selection)");
-            foreach (var conn in Planner.SkoposConnections)
-                foreach (var rx in conn.RxStations)
-                    _skoposConnection.Items.Add(new ConnectionEntry { Conn = conn, Rx = rx });
-            _skoposConnection.SelectedIndex = 0;
+            RepopulateSkoposConnections();
         }
         catch { /* never let station load failures crash the GUI */ }
 
@@ -435,6 +434,16 @@ public partial class MainForm : Form
         _lanOffset.ValueChanged   += (s, e) => { _cfg.LanOffsetDeg = (double)_lanOffset.Value; ScheduleRender(); };
         _skoposConnection.SelectedIndexChanged += (s, e) =>
         {
+            // "browse for telecom.cfg…" sentinel — let the user point us at the file. On success
+            // RepopulateSkoposConnections() resets SelectedIndex to 0; on cancel we reset it
+            // ourselves so the dropdown doesn't sit on the sentinel string.
+            if (_skoposConnection.SelectedItem is string str && str == BrowseForCfgSentinel)
+            {
+                BrowseForSkoposCfg();
+                if (_skoposConnection.SelectedItem is string still && still == BrowseForCfgSentinel)
+                    _skoposConnection.SelectedIndex = 0;
+                return;
+            }
             if (_skoposConnection.SelectedItem is ConnectionEntry entry)
             {
                 // From/To dropdowns hold catalog-annotated labels ("andover (58.0 dBi)"); a bare
@@ -881,6 +890,62 @@ public partial class MainForm : Form
             _btnTestAllConnections.Enabled = true;
             _btnTestAllConnections.Text = "Test all Skopos connections (multi-conn capacity)";
         }
+    }
+
+    /// <summary>Sentinel string shown in the Skopos connection dropdown that pops an
+    /// OpenFileDialog so the user can point us at a telecom.cfg (or re-point at a different
+    /// install). Always visible — useful both when the default Steam path doesn't apply and
+    /// when the user wants to switch between e.g. RP-1 vs vanilla-Skopos cfgs without restarting.</summary>
+    const string BrowseForCfgSentinel = "(browse for telecom.cfg…)";
+
+    /// <summary>Rebuild the Skopos connection dropdown from <see cref="Planner.SkoposConnections"/>.
+    /// Always exposes the "browse for telecom.cfg" entry as item #1 so the user can repoint at
+    /// any time, even if connections already loaded successfully.</summary>
+    void RepopulateSkoposConnections()
+    {
+        _skoposConnection.BeginUpdate();
+        try
+        {
+            _skoposConnection.Items.Clear();
+            _skoposConnection.Items.Add("(manual selection)");
+            foreach (var conn in Planner.SkoposConnections)
+                foreach (var rx in conn.RxStations)
+                    _skoposConnection.Items.Add(new ConnectionEntry { Conn = conn, Rx = rx });
+            // Browse entry sits at the bottom — out of the way during normal use, but still
+            // reachable when the user wants to repoint at a different cfg.
+            _skoposConnection.Items.Add(BrowseForCfgSentinel);
+            _skoposConnection.SelectedIndex = 0;
+        }
+        finally { _skoposConnection.EndUpdate(); }
+    }
+
+    /// <summary>OpenFileDialog flow for picking a telecom.cfg. On success: persists the path
+    /// to settings, tells Planner to reload from there, refreshes station + connection
+    /// dropdowns. On cancel or load failure, leaves things as they were.</summary>
+    void BrowseForSkoposCfg()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Locate Skopos telecom.cfg",
+            Filter = "KSP cfg files (*.cfg)|*.cfg|All files (*.*)|*.*",
+            FileName = "telecom.cfg",
+        };
+        // Pre-seed the dialog with the current path if any, otherwise the default Steam dir.
+        if (!string.IsNullOrEmpty(_settings.SkoposCfgPath) && File.Exists(_settings.SkoposCfgPath))
+            dlg.InitialDirectory = Path.GetDirectoryName(_settings.SkoposCfgPath);
+        else
+            dlg.InitialDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program\GameData\Skopos";
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        _settings.SkoposCfgPath = dlg.FileName;
+        Planner.ReloadSkoposCfg(dlg.FileName);
+        // Refresh the station dropdowns (catalog changes) and the connection dropdown.
+        RepopulateStationDropdowns();
+        RepopulateSkoposConnections();
+        int loaded = Planner.SkoposConnections.Count;
+        _status.Text = loaded > 0
+            ? $"Loaded {loaded} Skopos connections from {dlg.FileName}"
+            : $"Parsed {dlg.FileName} but found 0 connection blocks — wrong file?";
     }
 
     /// <summary>Holds one (Skopos connection × chosen rx station) pair for the connection
