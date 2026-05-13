@@ -243,7 +243,7 @@ public partial class MainForm : Form
     {
         var s = new GuiSettings
         {
-            OrbitType      = _orbitType.SelectedIndex switch { 1 => "Molniya", 2 => "Tundra", 3 => "Custom", _ => "WalkerCircular" },
+            OrbitType      = _orbitType.SelectedIndex switch { 1 => "WalkerStar", 2 => "Molniya", 3 => "Tundra", 4 => "Custom", _ => "WalkerCircular" },
             AltitudeKm     = (double)_altitude.Value,
             ApogeeAltitudeKm = (double)_apogee.Value,
             ArgPerigeeDeg  = (double)_argPe.Value,
@@ -307,7 +307,7 @@ public partial class MainForm : Form
 
     void ApplySettingsToControls(GuiSettings s)
     {
-        _orbitType.SelectedIndex = s.OrbitType switch { "Molniya" => 1, "Tundra" => 2, "Custom" => 3, _ => 0 };
+        _orbitType.SelectedIndex = s.OrbitType switch { "WalkerStar" => 1, "Molniya" => 2, "Tundra" => 3, "Custom" => 4, _ => 0 };
         SetNumeric(_altitude,    (decimal)s.AltitudeKm);
         SetNumeric(_apogee,      (decimal)Math.Max((double)_apogee.Minimum, s.ApogeeAltitudeKm));
         SetNumeric(_argPe,       (decimal)s.ArgPerigeeDeg);
@@ -423,9 +423,10 @@ public partial class MainForm : Form
         {
             _cfg.OrbitType = _orbitType.SelectedIndex switch
             {
-                1 => ConstellationPlanner.Cli.OrbitType.Molniya,
-                2 => ConstellationPlanner.Cli.OrbitType.Tundra,
-                3 => ConstellationPlanner.Cli.OrbitType.Custom,
+                1 => ConstellationPlanner.Cli.OrbitType.WalkerStar,
+                2 => ConstellationPlanner.Cli.OrbitType.Molniya,
+                3 => ConstellationPlanner.Cli.OrbitType.Tundra,
+                4 => ConstellationPlanner.Cli.OrbitType.Custom,
                 _ => ConstellationPlanner.Cli.OrbitType.WalkerCircular,
             };
             UpdateOrbitTypeUi(); UpdateAnimDurationCap(); ScheduleRender();
@@ -538,9 +539,10 @@ public partial class MainForm : Form
         // Initial config from controls.
         _cfg.OrbitType = _orbitType.SelectedIndex switch
         {
-            1 => ConstellationPlanner.Cli.OrbitType.Molniya,
-            2 => ConstellationPlanner.Cli.OrbitType.Tundra,
-            3 => ConstellationPlanner.Cli.OrbitType.Custom,
+            1 => ConstellationPlanner.Cli.OrbitType.WalkerStar,
+            2 => ConstellationPlanner.Cli.OrbitType.Molniya,
+            3 => ConstellationPlanner.Cli.OrbitType.Tundra,
+            4 => ConstellationPlanner.Cli.OrbitType.Custom,
             _ => ConstellationPlanner.Cli.OrbitType.WalkerCircular,
         };
         _cfg.AltitudeKm = (double)_altitude.Value;
@@ -694,8 +696,9 @@ public partial class MainForm : Form
         // Use perigee + apogee so elliptical SMA is computed correctly. For circular the two
         // are equal and this collapses to the same cap as before.
         double pe = _cfg.AltitudeKm;
-        double ap = _cfg.OrbitType == ConstellationPlanner.Cli.OrbitType.WalkerCircular
-                    ? pe : _cfg.ApogeeAltitudeKm;
+        bool isCircular = _cfg.OrbitType == ConstellationPlanner.Cli.OrbitType.WalkerCircular
+                       || _cfg.OrbitType == ConstellationPlanner.Cli.OrbitType.WalkerStar;
+        double ap = isCircular ? pe : _cfg.ApogeeAltitudeKm;
         var repeat = Planner.GroundTrackRepeat(pe, ap);
         double cycleH = repeat.CycleSec / 3600.0;
         decimal capped = (decimal)Math.Max(0.01, Math.Min(168.0, cycleH));
@@ -719,20 +722,27 @@ public partial class MainForm : Form
     {
         var ot = _orbitType.SelectedIndex switch
         {
-            1 => ConstellationPlanner.Cli.OrbitType.Molniya,
-            2 => ConstellationPlanner.Cli.OrbitType.Tundra,
-            3 => ConstellationPlanner.Cli.OrbitType.Custom,
+            1 => ConstellationPlanner.Cli.OrbitType.WalkerStar,
+            2 => ConstellationPlanner.Cli.OrbitType.Molniya,
+            3 => ConstellationPlanner.Cli.OrbitType.Tundra,
+            4 => ConstellationPlanner.Cli.OrbitType.Custom,
             _ => ConstellationPlanner.Cli.OrbitType.WalkerCircular,
         };
-        bool walker  = ot == ConstellationPlanner.Cli.OrbitType.WalkerCircular;
+        bool walkerDelta = ot == ConstellationPlanner.Cli.OrbitType.WalkerCircular;
+        bool walkerStar  = ot == ConstellationPlanner.Cli.OrbitType.WalkerStar;
+        bool walker      = walkerDelta || walkerStar;
         bool molniya = ot == ConstellationPlanner.Cli.OrbitType.Molniya;
         bool tundra  = ot == ConstellationPlanner.Cli.OrbitType.Tundra;
         bool custom  = ot == ConstellationPlanner.Cli.OrbitType.Custom;
 
         _lblAltitude.Text = walker ? "Altitude (km)" : "Perigee (km)";
         _apogee.Enabled    = custom;
-        _lanOffset.Enabled = !walker;
-        _argPe.Enabled     = !walker;
+        // LAN-offset rotates the whole shell. For Walker-delta the per-plane RAAN already wraps
+        // 0..360°, so a global offset is redundant; we still gray it. Walker-star wraps only
+        // 0..180° so a LAN offset can sensibly rotate the seam — leave it editable. Elliptical
+        // (Molniya/Tundra/Custom) needs it for parking apogee at a target longitude.
+        _lanOffset.Enabled = !walkerDelta;
+        _argPe.Enabled     = !walker;          // ω undefined for circular
         _inclination.Enabled = walker || custom;
 
         double peKm = (double)_altitude.Value;

@@ -286,6 +286,27 @@ namespace ConstellationPlanner.Core
                                              double eccentricity = 0,
                                              double argPerigeeDeg = 0,
                                              double raanOffsetDeg = 0)
+            => WalkerShell(360.0, altitude, bodyRadius, inclinationDeg, t, p, f, eccentricity, argPerigeeDeg, raanOffsetDeg);
+
+        /// <summary>Walker Star constellation — like <see cref="Delta"/> except planes span 180°
+        /// of RAAN instead of 360°. Used with polar / near-polar inclinations where each plane's
+        /// orbit covers both hemispheres in one period; Iridium's 66/6/2 at 86.4° inclination is
+        /// the canonical example. The "seam" between plane 0 (RAAN 0°) and plane P-1 (RAAN ~180°)
+        /// is where counter-rotating sats meet; ISLs across the seam are usually omitted because
+        /// the relative motion is too fast for a fixed tracking lock (see <see cref="NeighborMap"/>).</summary>
+        public static IList<Satellite> Star(double altitude, double bodyRadius, double inclinationDeg,
+                                            int t, int p, int f,
+                                            double eccentricity = 0,
+                                            double argPerigeeDeg = 0,
+                                            double raanOffsetDeg = 0)
+            => WalkerShell(180.0, altitude, bodyRadius, inclinationDeg, t, p, f, eccentricity, argPerigeeDeg, raanOffsetDeg);
+
+        static IList<Satellite> WalkerShell(double raanSpanDeg,
+                                             double altitude, double bodyRadius, double inclinationDeg,
+                                             int t, int p, int f,
+                                             double eccentricity,
+                                             double argPerigeeDeg,
+                                             double raanOffsetDeg)
         {
             if (t % p != 0)
                 throw new ArgumentException($"Walker T={t} must be divisible by P={p}.");
@@ -294,7 +315,7 @@ namespace ConstellationPlanner.Core
             var sats = new List<Satellite>(t);
             for (int planeIdx = 0; planeIdx < p; planeIdx++)
             {
-                double raan = raanOffsetDeg + planeIdx * 360.0 / p;
+                double raan = raanOffsetDeg + planeIdx * raanSpanDeg / p;
                 for (int satIdx = 0; satIdx < s; satIdx++)
                 {
                     double nu0 = (satIdx * 360.0 / s) + (planeIdx * f * 360.0 / t);
@@ -320,15 +341,19 @@ namespace ConstellationPlanner.Core
             return Delta(sma - bodyRadius, bodyRadius, inclinationDeg, t, p, f, e, argPerigeeDeg, raanOffsetDeg);
         }
 
-        /// <summary>For each sat in a Walker δT/P shell, return the four named ISL neighbour
+        /// <summary>For each sat in a Walker T/P shell, return the four named ISL neighbour
         /// indices in column order [forward_in_plane, aft_in_plane, port_cross_plane,
         /// starboard_cross_plane]. Indices match <see cref="Delta"/>'s flat ordering.
-        /// Cross-plane neighbours are at the same in-plane slot in plane±1 (RAAN±360°/P);
-        /// in-plane neighbours are slot±1 in the same plane. Set to −1 when the category
-        /// has no neighbour (S=1 → no in-plane; P=1 → no cross-plane). When S=2 the forward
-        /// and aft entries point to the same satellite (180° away in the orbit), which is
-        /// usually Earth-blocked — callers detect that via the LoS check.</summary>
-        public static int[,] NeighborMap(int t, int p)
+        /// Cross-plane neighbours are at the same in-plane slot in plane±1; in-plane neighbours
+        /// are slot±1 in the same plane. Set to −1 when the category has no neighbour
+        /// (S=1 → no in-plane; P=1 → no cross-plane). When S=2 the forward and aft entries
+        /// point to the same satellite (180° away in the orbit), which is usually Earth-blocked
+        /// — callers detect that via the LoS check.
+        /// <para>When <paramref name="isStar"/> is true, cross-plane neighbours don't wrap
+        /// circularly: planes 0 and P-1 are at the seam (RAAN spans only 180°) where adjacent
+        /// orbits are counter-rotating, so the inter-seam ISL slot is left -1. This matches the
+        /// real Iridium operational profile, which omits the cross-seam links.</para></summary>
+        public static int[,] NeighborMap(int t, int p, bool isStar = false)
         {
             if (t % p != 0)
                 throw new ArgumentException($"Walker T={t} must be divisible by P={p}.");
@@ -341,8 +366,18 @@ namespace ConstellationPlanner.Core
                     int satIdx = planeIdx * s + slotIdx;
                     map[satIdx, 0] = (s > 1) ? planeIdx * s + (slotIdx + 1) % s         : -1;
                     map[satIdx, 1] = (s > 1) ? planeIdx * s + (slotIdx - 1 + s) % s     : -1;
-                    map[satIdx, 2] = (p > 1) ? ((planeIdx + 1) % p) * s + slotIdx       : -1;
-                    map[satIdx, 3] = (p > 1) ? ((planeIdx - 1 + p) % p) * s + slotIdx   : -1;
+                    if (isStar)
+                    {
+                        // No wrap across the seam — plane P-1's "next" plane and plane 0's
+                        // "previous" plane don't exist (counter-rotating neighbours).
+                        map[satIdx, 2] = (p > 1 && planeIdx + 1 < p) ? (planeIdx + 1) * s + slotIdx : -1;
+                        map[satIdx, 3] = (p > 1 && planeIdx - 1 >= 0) ? (planeIdx - 1) * s + slotIdx : -1;
+                    }
+                    else
+                    {
+                        map[satIdx, 2] = (p > 1) ? ((planeIdx + 1) % p) * s + slotIdx       : -1;
+                        map[satIdx, 3] = (p > 1) ? ((planeIdx - 1 + p) % p) * s + slotIdx   : -1;
+                    }
                 }
             }
             return map;

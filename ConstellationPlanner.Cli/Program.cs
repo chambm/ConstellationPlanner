@@ -36,7 +36,15 @@ var cfg = new PlannerInput
 };
 
 string outDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
-Console.WriteLine($"Constellation: Walker δ{cfg.T}/{cfg.P}/{cfg.F}, alt={cfg.AltitudeKm:F0} km, inc={cfg.InclinationDeg}°");
+string patternLabel = cfg.OrbitType switch
+{
+    ConstellationPlanner.Cli.OrbitType.WalkerStar => "Walker star",
+    ConstellationPlanner.Cli.OrbitType.Molniya    => "Molniya",
+    ConstellationPlanner.Cli.OrbitType.Tundra     => "Tundra",
+    ConstellationPlanner.Cli.OrbitType.Custom     => "Custom",
+    _                                              => "Walker delta",
+};
+Console.WriteLine($"Constellation: {patternLabel} {cfg.T}/{cfg.P}/{cfg.F}, alt={cfg.AltitudeKm:F0} km, inc={cfg.InclinationDeg}°");
 Console.WriteLine($"Ground antenna: {cfg.GroundAntennaDiameterM:F2}m dish @ {cfg.GroundFrequencyGHz:F2} GHz, TL{cfg.TechLevel}");
 
 // ---------- Static snapshots ----------
@@ -84,7 +92,9 @@ if (isGeostationary)
 const int FramesPerHour = 30;
 // Pick the ground-track repeat period as the loop length: the constellation pattern returns
 // to (within ~1°) of its body-fixed start at this point, so the GIF can loop without a snap.
-double apForCycle = cfg.OrbitType == ConstellationPlanner.Cli.OrbitType.WalkerCircular ? cfg.AltitudeKm : cfg.ApogeeAltitudeKm;
+bool cycleIsCircular = cfg.OrbitType == ConstellationPlanner.Cli.OrbitType.WalkerCircular
+                    || cfg.OrbitType == ConstellationPlanner.Cli.OrbitType.WalkerStar;
+double apForCycle = cycleIsCircular ? cfg.AltitudeKm : cfg.ApogeeAltitudeKm;
 var repeat = Planner.GroundTrackRepeat(cfg.AltitudeKm, apForCycle);
 double animDurationH = repeat.CycleSec / 3600.0;
 int NumFrames = Math.Max(1, (int)Math.Round(FramesPerHour * animDurationH));

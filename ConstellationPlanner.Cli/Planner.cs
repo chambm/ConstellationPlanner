@@ -60,9 +60,15 @@ public enum CoverageMode
 /// elements are actively edited vs. derived from a preset (period, inclination, etc.).</summary>
 public enum OrbitType
 {
-    /// <summary>Circular shell — eccentricity 0, ω undefined. Inclination editable.
-    /// LAN/ArgPe are computed by the Walker generator (per-plane RAAN, ω = 0).</summary>
+    /// <summary>Walker-delta circular shell — eccentricity 0, ω undefined. Planes span the full
+    /// 360° of RAAN. Inclination editable. LAN/ArgPe are computed by the Walker generator
+    /// (per-plane RAAN, ω = 0).</summary>
     WalkerCircular,
+    /// <summary>Walker-star polar circular shell — same orbit shape as <see cref="WalkerCircular"/>
+    /// but planes span only 180° of RAAN, typical of polar / near-polar constellations
+    /// (Iridium's 66/6/2 at 86.4° is the canonical example). Cross-plane ISL targeting omits
+    /// the seam between plane 0 and plane P-1 because those neighbours are counter-rotating.</summary>
+    WalkerStar,
     /// <summary>12-sidereal-hour critical-inclination shell. Inclination locked at 63.4°,
     /// SMA fixed by the period; user picks perigee, apogee/eccentricity follow. ArgPe defaults
     /// to 270° (apogee at northern peak) but is editable.</summary>
@@ -400,7 +406,9 @@ public static class Planner
 
     static List<Satellite> BuildSats(PlannerInput cfg)
     {
-        bool isCircular = cfg.OrbitType == OrbitType.WalkerCircular;
+        bool isWalkerCircular = cfg.OrbitType == OrbitType.WalkerCircular;
+        bool isWalkerStar     = cfg.OrbitType == OrbitType.WalkerStar;
+        bool isCircular       = isWalkerCircular || isWalkerStar;
         double pe = cfg.AltitudeKm;
         double ap = isCircular ? cfg.AltitudeKm : cfg.ApogeeAltitudeKm;
         double rPe = EarthRadius + pe * 1000;
@@ -408,13 +416,20 @@ public static class Planner
         double smaM = (rPe + rAp) / 2;
         double ecc = Math.Max(0, (rAp - rPe) / (rAp + rPe));
         double argPeDeg = isCircular ? 0 : cfg.ArgPerigeeDeg;
-        double lanOffsetDeg = isCircular ? 0 : cfg.LanOffsetDeg;
-        var raw = Walker.Delta(altitude: smaM - EarthRadius, bodyRadius: EarthRadius,
-                                inclinationDeg: cfg.InclinationDeg,
-                                t: cfg.T, p: cfg.P, f: cfg.F,
-                                eccentricity: ecc,
-                                argPerigeeDeg: argPeDeg,
-                                raanOffsetDeg: lanOffsetDeg);
+        double lanOffsetDeg = isWalkerCircular ? 0 : cfg.LanOffsetDeg;
+        var raw = (isWalkerStar
+            ? Walker.Star(altitude: smaM - EarthRadius, bodyRadius: EarthRadius,
+                           inclinationDeg: cfg.InclinationDeg,
+                           t: cfg.T, p: cfg.P, f: cfg.F,
+                           eccentricity: ecc,
+                           argPerigeeDeg: argPeDeg,
+                           raanOffsetDeg: lanOffsetDeg)
+            : Walker.Delta(altitude: smaM - EarthRadius, bodyRadius: EarthRadius,
+                            inclinationDeg: cfg.InclinationDeg,
+                            t: cfg.T, p: cfg.P, f: cfg.F,
+                            eccentricity: ecc,
+                            argPerigeeDeg: argPeDeg,
+                            raanOffsetDeg: lanOffsetDeg));
         return raw.Select(s => new Satellite(
             s.SemiMajorAxis, s.Eccentricity, s.InclinationDeg, s.RaanDeg, s.ArgPerigeeDeg,
             s.TrueAnomalyAtT0Deg + cfg.PhaseOffsetDeg)).ToList();
@@ -515,7 +530,9 @@ public static class Planner
             },
             _ => new List<SatAntenna>(),
         };
-        int[,]? islTargets = cfg.IslMode == IslMode.Targeted ? Walker.NeighborMap(cfg.T, cfg.P) : null;
+        int[,]? islTargets = cfg.IslMode == IslMode.Targeted
+            ? Walker.NeighborMap(cfg.T, cfg.P, isStar: cfg.OrbitType == OrbitType.WalkerStar)
+            : null;
 
         return (groundAntennas, pathGroundAntennasPerConn, islAntennas, islTargets, ratePerConn);
     }
@@ -821,18 +838,21 @@ public static class Planner
         // tracks forward, 1 = aft, 2 = port, 3 = starboard — matches the antenna list above so
         // Relay.Find/IslAnalysis can use the antenna's slot directly as the column key.
         int[,]? islTargets = cfg.IslMode == IslMode.Targeted
-            ? Walker.NeighborMap(cfg.T, cfg.P)
+            ? Walker.NeighborMap(cfg.T, cfg.P, isStar: cfg.OrbitType == OrbitType.WalkerStar)
             : null;
         // Header values used by output struct + caption come from the ground budget (the
         // role most users care about for the heatmap colours).
         float gain = coverageGroundBudget.TxGainDbi;
         float beamwidth = coverageGroundBudget.BeamwidthDeg;
 
-        // Build constellation. For circular orbits, AltitudeKm is the orbital altitude and
-        // ApogeeAltitudeKm is ignored. For elliptical (Molniya/Tundra/Custom), AltitudeKm is
-        // the perigee altitude and the apogee comes from the cfg directly. Eccentricity and
-        // ω flow into Walker.Delta so the orbit's apse line and shape are honoured per-sat.
-        bool isCircular = cfg.OrbitType == OrbitType.WalkerCircular;
+        // Build constellation. For circular orbits (Walker-delta / Walker-star), AltitudeKm is
+        // the orbital altitude and ApogeeAltitudeKm is ignored. For elliptical (Molniya / Tundra
+        // / Custom), AltitudeKm is the perigee altitude and the apogee comes from the cfg
+        // directly. Walker-star is the same shell shape but planes span 180° of RAAN instead of
+        // 360° (polar / Iridium-style); Walker.Star vs Walker.Delta picks the right RAAN span.
+        bool isWalkerStar    = cfg.OrbitType == OrbitType.WalkerStar;
+        bool isWalkerCircular = cfg.OrbitType == OrbitType.WalkerCircular;
+        bool isCircular      = isWalkerCircular || isWalkerStar;
         double perigeeAltKm = cfg.AltitudeKm;
         double apogeeAltKm  = isCircular ? cfg.AltitudeKm : cfg.ApogeeAltitudeKm;
         double rPe = EarthRadius + perigeeAltKm * 1000;
@@ -841,13 +861,20 @@ public static class Planner
         double ecc = (rAp - rPe) / (rAp + rPe);
         if (ecc < 0) ecc = 0;          // Pe > Ap: silently swap to avoid negative-e math
         double argPeDeg = isCircular ? 0 : cfg.ArgPerigeeDeg;
-        double lanOffsetDeg = isCircular ? 0 : cfg.LanOffsetDeg;
-        var rawSats = Walker.Delta(altitude: smaM - EarthRadius, bodyRadius: EarthRadius,
-                                    inclinationDeg: cfg.InclinationDeg,
-                                    t: cfg.T, p: cfg.P, f: cfg.F,
-                                    eccentricity: ecc,
-                                    argPerigeeDeg: argPeDeg,
-                                    raanOffsetDeg: lanOffsetDeg);
+        double lanOffsetDeg = isWalkerCircular ? 0 : cfg.LanOffsetDeg;
+        var rawSats = isWalkerStar
+            ? Walker.Star(altitude: smaM - EarthRadius, bodyRadius: EarthRadius,
+                           inclinationDeg: cfg.InclinationDeg,
+                           t: cfg.T, p: cfg.P, f: cfg.F,
+                           eccentricity: ecc,
+                           argPerigeeDeg: argPeDeg,
+                           raanOffsetDeg: lanOffsetDeg)
+            : Walker.Delta(altitude: smaM - EarthRadius, bodyRadius: EarthRadius,
+                            inclinationDeg: cfg.InclinationDeg,
+                            t: cfg.T, p: cfg.P, f: cfg.F,
+                            eccentricity: ecc,
+                            argPerigeeDeg: argPeDeg,
+                            raanOffsetDeg: lanOffsetDeg);
         var sats = rawSats.Select(s => new Satellite(
             s.SemiMajorAxis, s.Eccentricity, s.InclinationDeg, s.RaanDeg, s.ArgPerigeeDeg,
             s.TrueAnomalyAtT0Deg + cfg.PhaseOffsetDeg)).ToList();
@@ -1230,11 +1257,22 @@ public static class Planner
         int mm = (int)((tSec - hh * 3600) / 60);
         string timeLabel = $"t = {hh:D2}:{mm:D2}";
         int telecomCount = stations.Count(s => s.Kind == StationKind.Telecom);
+        // Pattern label reflects the orbit type so a Walker-star shell or a Molniya / Tundra
+        // / Custom orbit isn't mis-labelled "Walker delta" on the caption.
+        string patternLabel = cfg.OrbitType switch
+        {
+            OrbitType.WalkerStar => "Walker star",
+            OrbitType.Molniya    => "Molniya",
+            OrbitType.Tundra     => "Tundra",
+            OrbitType.Custom     => "Custom",
+            _                    => "Walker delta",
+        };
         string caption;
         if (cfg.FullCaption)
         {
+            string altLabel = isCircular ? $"alt={cfg.AltitudeKm:F0} km" : $"Pe={perigeeAltKm:F0}/Ap={apogeeAltKm:F0} km";
             caption =
-                $"{cfg.T} sats — Walker δ{cfg.T}/{cfg.P}/{cfg.F}, alt={cfg.AltitudeKm:F0} km, inc={cfg.InclinationDeg}° | rotating Earth | {timeLabel}\n"
+                $"{cfg.T} sats — {patternLabel} {cfg.T}/{cfg.P}/{cfg.F}, {altLabel}, inc={cfg.InclinationDeg}° | rotating Earth | {timeLabel}\n"
                 + $"ground antenna: {cfg.GroundAntennaDiameterM:F2}m @ {cfg.GroundFrequencyGHz:F2} GHz, gain {gain:F1} dBi, HPBW {beamwidth:F1}°, ch {cfg.GroundBandwidthMHz:F0} MHz | TL{cfg.TechLevel}, tx {coverageGroundBudget.TxPowerDbm:F0} dBm | ground×{groundAntennas.Count}, ISL×{islAntennas.Count}\n"
                 + $"ISLs: {isls.Count} pairs | ground links: {groundLinks.Count} pairs\n"
                 + $"yellow □ = RA tracking station, cyan ● = Skopos telecom ({telecomCount}), magenta ◎ = path endpoint, lime line = best relay path, pink dashed = footprint (−3 dB, {footprintHalfAngleDeg:F0}° GC radius)\n"
@@ -1242,7 +1280,7 @@ public static class Planner
         }
         else
         {
-            caption = $"{timeLabel} · Walker δ{cfg.T}/{cfg.P}/{cfg.F} · ISLs {isls.Count} · gnd {groundLinks.Count}"
+            caption = $"{timeLabel} · {patternLabel} {cfg.T}/{cfg.P}/{cfg.F} · ISLs {isls.Count} · gnd {groundLinks.Count}"
                     + (relayCaption.Length > 0 ? $" · {relayCaption}" : "");
         }
 

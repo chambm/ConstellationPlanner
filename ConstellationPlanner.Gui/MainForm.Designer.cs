@@ -464,7 +464,7 @@ partial class MainForm
         //
         this._orbitType.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
         this._orbitType.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-        this._orbitType.Items.AddRange(new object[] { "Walker-Δ (circular)", "Molniya (12h, i=63.4°, ω=270°)", "Tundra (24h, i=63.4°, ω=270°)", "Custom (free-form)" });
+        this._orbitType.Items.AddRange(new object[] { "Walker-delta (circular)", "Walker-star (polar circular)", "Molniya (12h, i=63.4°, ω=270°)", "Tundra (24h, i=63.4°, ω=270°)", "Custom (free-form)" });
         this._orbitType.Margin = new System.Windows.Forms.Padding(0, 2, 0, 0);
         this._orbitType.Name = "_orbitType";
         this._orbitType.Size = new System.Drawing.Size(260, 23);
