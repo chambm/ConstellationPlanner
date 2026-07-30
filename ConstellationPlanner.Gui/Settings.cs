@@ -11,6 +11,13 @@ public sealed class GuiSettings
     /// Set by the GUI's "browse for telecom.cfg" flow in the connection dropdown.</summary>
     public string SkoposCfgPath { get; set; } = "";
 
+    /// <summary>Absolute path to the user's KSP <c>GameData</c> directory. When set, on
+    /// launch the GUI scans <c>RealAntennas/Parts/*.cfg</c> for an up-to-date antenna list
+    /// (every part RA patches, including modded antennas like NFE/RT-Redev). Empty string
+    /// keeps the hardcoded fallback catalog. Set by the GUI's "load antennas from GameData…"
+    /// dropdown entry.</summary>
+    public string GameDataPath { get; set; } = "";
+
     // Constellation
     public string OrbitType { get; set; } = "WalkerCircular"; // WalkerCircular / Molniya / Tundra / Custom
     /// <summary>Perigee altitude (km) — used as plain "altitude" in WalkerCircular mode.</summary>
@@ -29,11 +36,20 @@ public sealed class GuiSettings
     // Sat hardware
     public int TechLevel { get; set; } = 3;
 
-    // Ground antennas (catalog name, not the dropdown's display string)
+    // Ground antennas — the dropdown selections below are just the "Add antenna" template
+    // (used to populate gain/freq when the user clicks the Add button). The authoritative
+    // configured antennas live in `GroundAntennas` (one entry per dish).
     public string GroundAntennaModel { get; set; } = "Communotron HG-61";
     public string GroundBand { get; set; } = "L";
     public double GroundStationGainDbi { get; set; } = 50;
-    public string GroundAimList { get; set; } = "nadir 270 0";
+    /// <summary>Structured per-antenna list. Each entry is one dish with its own band, gain,
+    /// and aim direction. Replaces the legacy <see cref="GroundAimList"/> text field; the old
+    /// field is parsed on first load only when this list is empty.</summary>
+    public List<ConstellationPlanner.Cli.AntennaAim> GroundAntennas { get; set; } = new();
+    /// <summary>Legacy multi-line aim list ("name az el" or "az el band gain" per line). Kept
+    /// for backward-compatible loading of pre-listbox settings files; once loaded it migrates
+    /// into <see cref="GroundAntennas"/> and is never written again.</summary>
+    public string GroundAimList { get; set; } = "";
     /// <summary>Sat-side TX power for ground-link antennas (dBm). 0 = use TL.MaxPowerDbm.</summary>
     public double GroundTxPowerDbm { get; set; } = 0;
 
@@ -66,6 +82,13 @@ public sealed class GuiSettings
     public int FrameCount { get; set; } = 24;
     public double AnimDurationH { get; set; } = 24;
     public int PlaybackFps { get; set; } = 10;
+
+    // Optimizer — persisted across runs so the user doesn't have to re-define the same
+    // search space every time. Null on first run; the dialog falls back to a baseline-locked
+    // default (everything fixed to current GUI values) and lets the user widen ranges.
+    public ConstellationPlanner.Cli.OptimizerSearchSpace? OptimizerSearchSpace { get; set; }
+    public int OptimizerTrials { get; set; } = 100;
+    public int OptimizerSamplesPerTrial { get; set; } = 500;
 
     // Window
     public int FormWidth { get; set; } = 1700;

@@ -50,6 +50,19 @@ public partial class MainForm : Form
         if (!string.IsNullOrEmpty(_settings.SkoposCfgPath))
             Planner.ReloadSkoposCfg(_settings.SkoposCfgPath);
 
+        // Antenna catalog: if the user has selected a GameData directory before, scan it now
+        // so the ISL dropdown reflects RA+mod antennas instead of the hardcoded fallback.
+        // Done before PopulateCatalogs so the first dropdown fill already uses the live list.
+        if (!string.IsNullOrEmpty(_settings.GameDataPath) && Directory.Exists(_settings.GameDataPath))
+        {
+            try
+            {
+                var cat = AntennaCatalogLoader.LoadFromGameData(_settings.GameDataPath);
+                Catalogs.ReplaceAntennaCatalog(cat.Dishes, cat.Omnis);
+            }
+            catch { /* fall back to defaults silently */ }
+        }
+
         // Catalog-driven items can't go in the designer file (they require LINQ / runtime
         // catalog enumeration); populate them here, before we apply persisted settings.
         PopulateCatalogs();
@@ -225,6 +238,10 @@ public partial class MainForm : Form
             foreach (var a in Catalogs.Antennas)
                 _islAnt.Items.Add($"{a.Name} ({a.DiameterM:F2}m)");
         }
+        // Trailing sentinel — picking it pops a FolderBrowserDialog to rescan
+        // RealAntennas/Parts/*.cfg. Sits at the bottom so it doesn't disrupt arrow-key
+        // browsing through the actual antennas.
+        _islAnt.Items.Add(BrowseForGameDataSentinel);
         if (_islAnt.Items.Count > 0)
         {
             if (!string.IsNullOrEmpty(current))
@@ -260,7 +277,12 @@ public partial class MainForm : Form
             GroundAntennaModel = ParseLeadingName(_groundAnt.SelectedItem?.ToString()),
             GroundBand         = ParseLeadingName(_groundBand.SelectedItem?.ToString()),
             GroundStationGainDbi = _cfg.GroundStationGainDbi,
-            GroundAimList      = _groundAnts.Text,
+            GroundAntennas     = _cfg.GroundAntennas.Select(a => new AntennaAim
+                                 {
+                                     AzimuthDeg = a.AzimuthDeg, ElevationDeg = a.ElevationDeg,
+                                     Band = a.Band, GainDbi = a.GainDbi, TxPowerDbm = a.TxPowerDbm,
+                                 }).ToList(),
+            GroundAimList      = "",   // legacy field, ignored on load when GroundAntennas is non-empty
             GroundTxPowerDbm   = (double)_groundTxPower.Value,
 
             IslMode            = _islMode.SelectedIndex switch { 1 => "Omni", 2 => "Directional", 3 => "Targeted", _ => "None" },
@@ -302,6 +324,14 @@ public partial class MainForm : Form
             s.FormTop = RestoreBounds.Top;
         }
         s.FormMaximized = WindowState == FormWindowState.Maximized;
+
+        // Optimizer fields aren't bound to controls — they live only in _settings, written
+        // when the optimizer dialog hits OK. Carry them forward so they survive close/reopen.
+        s.OptimizerSearchSpace      = _settings.OptimizerSearchSpace;
+        s.OptimizerTrials           = _settings.OptimizerTrials;
+        s.OptimizerSamplesPerTrial  = _settings.OptimizerSamplesPerTrial;
+        s.SkoposCfgPath             = _settings.SkoposCfgPath;
+        s.GameDataPath              = _settings.GameDataPath;
         return s;
     }
 
@@ -322,7 +352,20 @@ public partial class MainForm : Form
 
         SelectByPrefix(_groundAnt,  s.GroundAntennaModel);
         SelectByPrefix(_groundBand, s.GroundBand);
-        _groundAnts.Text = s.GroundAimList;
+        // Source of truth for ground antennas is the structured list. If the new settings file
+        // has GroundAntennas populated, use it; otherwise migrate from the legacy aim-list
+        // string (one-time conversion for users coming from the old textbox UI).
+        if (s.GroundAntennas != null && s.GroundAntennas.Count > 0)
+            _cfg.GroundAntennas = s.GroundAntennas.Select(a => new AntennaAim
+            {
+                AzimuthDeg = a.AzimuthDeg, ElevationDeg = a.ElevationDeg,
+                Band = string.IsNullOrEmpty(a.Band) ? "L" : a.Band,
+                GainDbi = a.GainDbi > 0 ? a.GainDbi : 50,
+                TxPowerDbm = a.TxPowerDbm,    // 0 = inherit TL.MaxPowerDbm at eval time
+            }).ToList();
+        else
+            _cfg.GroundAntennas = ParseAntennas(s.GroundAimList ?? "");
+        RefreshGroundAimListBox();
         SetNumeric(_groundTxPower, (decimal)s.GroundTxPowerDbm);
 
         int targetIslMode = s.IslMode switch { "Omni" => 1, "Directional" => 2, "Targeted" => 3, _ => 0 };
@@ -464,6 +507,7 @@ public partial class MainForm : Form
             }
         };
         _btnTestAllConnections.Click += async (s, e) => await RunTestAllConnections();
+        _btnOptimize.Click            += async (s, e) => await RunOptimizeAsync();
         _inclination.ValueChanged += (s, e) => { _cfg.InclinationDeg = (double)_inclination.Value; ScheduleRender(); };
         _t.ValueChanged           += (s, e) => { _cfg.T = (int)_t.Value; ScheduleRender(); };
         _p.ValueChanged           += (s, e) => { _cfg.P = (int)_p.Value; ScheduleRender(); };
@@ -500,7 +544,20 @@ public partial class MainForm : Form
                 ScheduleRender();
             }));
         };
-        _islAnt.SelectedIndexChanged     += (s, e) => { ApplyIslCatalog();      UpdateInfoLabels(); ScheduleRender(); };
+        _islAnt.SelectedIndexChanged     += (s, e) =>
+        {
+            if (_islAnt.SelectedItem is string str && str == BrowseForGameDataSentinel)
+            {
+                BrowseForGameData();
+                // After the dialog the catalog has been (potentially) rebuilt and the dropdown
+                // repopulated. If the user cancelled, fall back to index 0 so we don't sit on
+                // the sentinel.
+                if (_islAnt.SelectedItem is string still && still == BrowseForGameDataSentinel)
+                    _islAnt.SelectedIndex = 0;
+                return;
+            }
+            ApplyIslCatalog(); UpdateInfoLabels(); ScheduleRender();
+        };
         _islBand.SelectedIndexChanged    += (s, e) => { ApplyIslCatalog();      UpdateInfoLabels(); ScheduleRender(); };
         _groundTxPower.ValueChanged      += (s, e) => { _cfg.GroundTxPowerDbm = (double)_groundTxPower.Value; ScheduleRender(); };
         _islTxPower.ValueChanged         += (s, e) => { _cfg.IslTxPowerDbm    = (double)_islTxPower.Value;    ScheduleRender(); };
@@ -508,7 +565,53 @@ public partial class MainForm : Form
         _coverageMode.SelectedIndexChanged += (s, e) => { _cfg.CoverageMode = _coverageMode.SelectedIndex == 1 ? CoverageMode.Instantaneous : CoverageMode.DailyAverage; ScheduleRender(); };
         _techLevel.ValueChanged          += (s, e) => UpdateInfoLabels();
 
-        _groundAnts.TextChanged   += (s, e) => { _cfg.GroundAntennas = ParseAntennas(_groundAnts.Text); ScheduleRender(); };
+        // Aim list is a structured ListBox driven by Add / Apply / Remove buttons. The Add
+        // button builds an AntennaAim from current dropdown/spinner values and appends.
+        // The Apply button mutates the currently-selected entry in place. The Remove button
+        // drops the selected entry. Selecting an entry populates the controls so the user can
+        // edit it.
+        _btnAddGroundAim.Click   += (s, e) =>
+        {
+            _cfg.GroundAntennas.Add(BuildAntennaAimFromControls());
+            RefreshGroundAimListBox();
+            _groundAimList.SelectedIndex = _cfg.GroundAntennas.Count - 1;
+            ScheduleRender();
+        };
+        _btnApplyGroundAim.Click += (s, e) =>
+        {
+            int idx = _groundAimList.SelectedIndex;
+            if (idx < 0 || idx >= _cfg.GroundAntennas.Count) return;
+            _cfg.GroundAntennas[idx] = BuildAntennaAimFromControls();
+            RefreshGroundAimListBox();
+            _groundAimList.SelectedIndex = idx;     // preserve selection after rebuild
+            ScheduleRender();
+        };
+        _btnRemoveGroundAim.Click += (s, e) =>
+        {
+            int idx = _groundAimList.SelectedIndex;
+            if (idx < 0 || idx >= _cfg.GroundAntennas.Count) return;
+            _cfg.GroundAntennas.RemoveAt(idx);
+            RefreshGroundAimListBox();
+            ScheduleRender();
+        };
+        // Clicking an entry copies its values back into the dropdowns/spinners so the user can
+        // tweak and hit Apply. It ALSO sets _cfg.SelectedGroundAntennaIndex so the coverage
+        // heatmap re-renders for the selected antenna's band — that's how the user flips between
+        // bands when the constellation has multiple ground antennas covering different bands.
+        _groundAimList.SelectedIndexChanged += (s, e) =>
+        {
+            int idx = _groundAimList.SelectedIndex;
+            if (idx < 0 || idx >= _cfg.GroundAntennas.Count) return;
+            var a = _cfg.GroundAntennas[idx];
+            SelectByPrefix(_groundBand, a.Band);
+            SetNumeric(_groundAimAz, (decimal)a.AzimuthDeg);
+            SetNumeric(_groundAimEl, (decimal)a.ElevationDeg);
+            SetNumeric(_groundTxPower, (decimal)a.TxPowerDbm);
+            // Don't try to back-out which antenna model matches — there's no unique mapping
+            // from (band, gain) to a catalog entry, so we leave the antenna dropdown alone.
+            _cfg.SelectedGroundAntennaIndex = idx;
+            ScheduleRender();
+        };
 
         _pathFrom.SelectedIndexChanged += (s, e) => { _cfg.PathFromName = ParseLeadingName(_pathFrom.SelectedItem?.ToString()); RefreshStationGain(); ScheduleRender(); };
         _pathTo.SelectedIndexChanged   += (s, e) => { _cfg.PathToName   = ParseLeadingName(_pathTo.SelectedItem?.ToString());   RefreshStationGain(); ScheduleRender(); };
@@ -562,7 +665,8 @@ public partial class MainForm : Form
         ApplyGroundCatalog();
         ApplyIslCatalog();
         RefreshStationGain();
-        _cfg.GroundAntennas = ParseAntennas(_groundAnts.Text);
+        // _cfg.GroundAntennas is owned by the structured ListBox (populated in
+        // ApplySettingsToControls and mutated via the Add/Remove buttons). Nothing to copy here.
         UpdateInfoLabels();
         UpdateIslEnable();
         _cfg.PathFromName = ParseLeadingName(_pathFrom.SelectedItem?.ToString());
@@ -795,6 +899,83 @@ public partial class MainForm : Form
     /// constellation's repeat cycle with a shared <see cref="ConstellationPlanner.Core.NetworkUsage"/>
     /// at each timestep so capacity contention propagates Skopos-style. Dumps a per-connection
     /// summary into the status textbox: name | uptime | met-window | avg lat | avg rate.</summary>
+    /// <summary>Open the optimizer search-space dialog, then (on OK) the results-streaming
+    /// dialog and let the search run. The user's current main-GUI config becomes the baseline
+    /// for parameters whose min/max collapse to a single value; everything else gets sampled
+    /// uniformly across its range. Same Skopos (connection × rx) set as the "Test all" button.</summary>
+    async Task RunOptimizeAsync()
+    {
+        if (Planner.SkoposConnections.Count == 0)
+        {
+            _status.Text = "no Skopos connections loaded — check that telecom.cfg is present.";
+            return;
+        }
+
+        var baseline = CloneCfg(_cfg);
+        baseline.SkipHeatmap = true;
+
+        using var pickDlg = new OptimizeParamsDialog(_settings.OptimizerSearchSpace, baseline,
+                                                     _settings.OptimizerTrials, _settings.OptimizerSamplesPerTrial);
+        if (pickDlg.ShowDialog(this) != DialogResult.OK) return;
+        if (!pickDlg.SearchSpace.HasAnyVariation)
+        {
+            _status.Text = "Optimizer: every parameter is locked — nothing to vary.";
+            return;
+        }
+
+        // Persist the user's choices so the next click starts from the same setup.
+        _settings.OptimizerSearchSpace = pickDlg.SearchSpace;
+        _settings.OptimizerTrials = pickDlg.Trials;
+        _settings.OptimizerSamplesPerTrial = pickDlg.SamplesPerTrial;
+
+        // Build the same (connection × rx) list the "Test all" button uses, so results are
+        // comparable across both flows.
+        var connections = new List<(ConstellationPlanner.Core.SkoposConnection, int)>();
+        foreach (var c in Planner.SkoposConnections)
+            for (int rxIdx = 0; rxIdx < c.RxStations.Count; rxIdx++)
+                connections.Add((c, rxIdx));
+
+        _btnOptimize.Enabled = false;
+        try
+        {
+            using var resDlg = new OptimizeResultsDialog(pickDlg.Trials);
+            resDlg.OnApplyConfig = ApplyOptimizerResult;
+            resDlg.Shown += async (s, e) =>
+            {
+                await resDlg.RunAsync(baseline, connections, pickDlg.SearchSpace,
+                                       pickDlg.Trials, pickDlg.SamplesPerTrial);
+            };
+            resDlg.ShowDialog(this);
+        }
+        finally { _btnOptimize.Enabled = true; }
+    }
+
+    /// <summary>Push an optimizer trial's orbital parameters into the main GUI controls and
+    /// trigger a re-render. Only the constellation/orbit fields are applied — antennas, paths,
+    /// ground stations, etc. stay as-is because the optimizer doesn't touch them. Each
+    /// SetNumeric fires ValueChanged → ScheduleRender, which is debounced, so the cascade
+    /// settles into a single render once all controls are set.</summary>
+    public void ApplyOptimizerResult(ConstellationPlanner.Cli.PlannerInput cfg)
+    {
+        _orbitType.SelectedIndex = cfg.OrbitType switch
+        {
+            ConstellationPlanner.Cli.OrbitType.WalkerStar => 1,
+            ConstellationPlanner.Cli.OrbitType.Molniya    => 2,
+            ConstellationPlanner.Cli.OrbitType.Tundra     => 3,
+            ConstellationPlanner.Cli.OrbitType.Custom     => 4,
+            _ => 0,
+        };
+        SetNumeric(_altitude,    (decimal)cfg.AltitudeKm);
+        SetNumeric(_apogee,      (decimal)Math.Max((double)_apogee.Minimum, cfg.ApogeeAltitudeKm));
+        SetNumeric(_inclination, (decimal)cfg.InclinationDeg);
+        SetNumeric(_argPe,       (decimal)cfg.ArgPerigeeDeg);
+        SetNumeric(_lanOffset,   (decimal)cfg.LanOffsetDeg);
+        SetNumeric(_t, cfg.T);
+        SetNumeric(_p, cfg.P);
+        SetNumeric(_f, cfg.F);
+        SetNumeric(_phaseOffset, (decimal)cfg.PhaseOffsetDeg);
+    }
+
     async Task RunTestAllConnections()
     {
         if (Planner.SkoposConnections.Count == 0)
@@ -908,6 +1089,12 @@ public partial class MainForm : Form
     /// when the user wants to switch between e.g. RP-1 vs vanilla-Skopos cfgs without restarting.</summary>
     const string BrowseForCfgSentinel = "(browse for telecom.cfg…)";
 
+    /// <summary>Sentinel string shown as the last entry in <see cref="_islAnt"/> — picking it
+    /// pops a FolderBrowserDialog so the user can point us at their KSP <c>GameData</c>
+    /// directory. The loader rescans <c>RealAntennas/Parts/*.cfg</c> and refreshes the
+    /// catalog with whatever antenna mods (NFE, ReStock, etc.) are present.</summary>
+    const string BrowseForGameDataSentinel = "(load antennas from GameData…)";
+
     /// <summary>Rebuild the Skopos connection dropdown from <see cref="Planner.SkoposConnections"/>.
     /// Always exposes the "browse for telecom.cfg" entry as item #1 so the user can repoint at
     /// any time, even if connections already loaded successfully.</summary>
@@ -958,6 +1145,55 @@ public partial class MainForm : Form
             : $"Parsed {dlg.FileName} but found 0 connection blocks — wrong file?";
     }
 
+    /// <summary>FolderBrowserDialog flow for picking a KSP <c>GameData</c> directory.
+    /// On success: rescans <c>RealAntennas/Parts/*.cfg</c> via
+    /// <see cref="AntennaCatalogLoader"/>, replaces <see cref="Catalogs"/>, persists the
+    /// path, and repopulates the ISL antenna dropdown.</summary>
+    void BrowseForGameData()
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = "Locate your KSP GameData directory",
+            ShowNewFolderButton = false,
+            UseDescriptionForTitle = true,
+        };
+        if (!string.IsNullOrEmpty(_settings.GameDataPath) && Directory.Exists(_settings.GameDataPath))
+            dlg.SelectedPath = _settings.GameDataPath;
+        else
+        {
+            const string steamDefault = @"C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program\GameData";
+            if (Directory.Exists(steamDefault)) dlg.SelectedPath = steamDefault;
+        }
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        _settings.GameDataPath = dlg.SelectedPath;
+        var (msg, _) = LoadAntennasFromGameData(dlg.SelectedPath);
+        _status.Text = msg;
+    }
+
+    /// <summary>Run the antenna scan against <paramref name="gameDataPath"/>; on success
+    /// replace the live catalog and rebuild the ISL antenna dropdown. Returns a status
+    /// string for display and the loaded catalog (for the caller to inspect).</summary>
+    (string status, LoadedAntennaCatalog cat) LoadAntennasFromGameData(string gameDataPath)
+    {
+        LoadedAntennaCatalog cat;
+        try
+        {
+            cat = AntennaCatalogLoader.LoadFromGameData(gameDataPath);
+        }
+        catch (Exception ex)
+        {
+            return ($"GameData scan failed: {ex.GetType().Name}: {ex.Message}", new LoadedAntennaCatalog());
+        }
+
+        if (cat.Dishes.Count == 0 && cat.Omnis.Count == 0)
+            return ($"No RealAntennas patches found under {gameDataPath}\\RealAntennas\\Parts (catalog unchanged).", cat);
+
+        Catalogs.ReplaceAntennaCatalog(cat.Dishes, cat.Omnis);
+        RepopulateIslAntennas(_islMode.SelectedIndex == 1);
+        return ($"Loaded {cat.Dishes.Count} dishes + {cat.Omnis.Count} omnis from {gameDataPath}\\RealAntennas\\Parts ({cat.FilesScanned} patch files, {cat.TitlesFound} part titles merged).", cat);
+    }
+
     /// <summary>Holds one (Skopos connection × chosen rx station) pair for the connection
     /// dropdown. The display string includes the connection's rate + latency budget so the
     /// user can tell at a glance what they're testing against.</summary>
@@ -976,6 +1212,61 @@ public partial class MainForm : Form
         }
     }
 
+    /// <summary>Repopulate the ground aim-list listbox from <see cref="PlannerInput.GroundAntennas"/>.
+    /// Each row reads <c>az=N° el=N° Band gain dBi HPBW° txpower dBm</c>. Preserves the user's
+    /// selection index when possible (e.g. after Add the new item is appended; after Remove
+    /// the selection snaps to the next row).</summary>
+    void RefreshGroundAimListBox()
+    {
+        int prevSel = _groundAimList.SelectedIndex;
+        _groundAimList.BeginUpdate();
+        _groundAimList.Items.Clear();
+        foreach (var a in _cfg.GroundAntennas)
+        {
+            float hpbw = ConstellationPlanner.Core.Physics.Beamwidth((float)a.GainDbi);
+            // Per-antenna TX-power column shows the effective value: a 0 stored means "inherit
+            // TL", so display the resolved TL.MaxPowerDbm instead of literal "0 dBm".
+            double effTx = a.TxPowerDbm > 0 ? a.TxPowerDbm : TechLevels.Get((int)_techLevel.Value).MaxPowerDbm;
+            _groundAimList.Items.Add(
+                $"az={a.AzimuthDeg,6:F1}°  el={a.ElevationDeg,5:F1}°   {a.Band,-3}  {a.GainDbi,5:F1} dBi  HPBW {hpbw,4:F1}°  {effTx,4:F0} dBm");
+        }
+        if (_groundAimList.Items.Count > 0)
+            _groundAimList.SelectedIndex = Math.Min(Math.Max(0, prevSel), _groundAimList.Items.Count - 1);
+        _groundAimList.EndUpdate();
+    }
+
+    /// <summary>Pull an <see cref="AntennaAim"/> from the current Ground antennas template
+    /// controls (band dropdown + antenna model dropdown for gain + az/el spinners + tx-power
+    /// spinner). Used by both the Add and Apply buttons.</summary>
+    AntennaAim BuildAntennaAimFromControls()
+    {
+        var ant = Catalogs.FindAntenna(ParseLeadingName(_groundAnt.SelectedItem?.ToString()));
+        var band = Catalogs.FindBand(ParseLeadingName(_groundBand.SelectedItem?.ToString()));
+        double gain = ant.IsOmni
+            ? ant.GainDbi
+            : ConstellationPlanner.Core.Physics.GainFromDishDiamater(
+                (float)ant.DiameterM, (float)(band.FrequencyGHz * 1e9),
+                (float)TechLevels.Get((int)_techLevel.Value).ReflectorEff);
+        return new AntennaAim
+        {
+            AzimuthDeg   = (double)_groundAimAz.Value,
+            ElevationDeg = (double)_groundAimEl.Value,
+            Band         = band.Name,
+            GainDbi      = gain,
+            TxPowerDbm   = (double)_groundTxPower.Value,
+        };
+    }
+
+    /// <summary>Parse the ground-antenna aim list. Each non-empty line is one antenna in the
+    /// form <c>az el [band [gain]]</c>:
+    /// <list type="bullet">
+    ///   <item><c>az el</c> — only two numbers; band defaults to "L", gain to 50 dBi.</item>
+    ///   <item><c>az el X</c> — band specified, gain defaults to 50 dBi.</item>
+    ///   <item><c>az el X 52</c> — fully specified per-antenna.</item>
+    /// </list>
+    /// Lines beginning with a non-numeric token are treated as legacy "name az el" entries and
+    /// the leading name is dropped (it was always cosmetic — only ever used as the label in
+    /// SatAntenna output).</summary>
     static List<AntennaAim> ParseAntennas(string text)
     {
         var list = new List<AntennaAim>();
@@ -984,12 +1275,35 @@ public partial class MainForm : Form
             var line = rawLine.Split('#')[0].Trim();
             if (line.Length == 0) continue;
             var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 2) continue;
-            int nLast = parts.Length - 1;
-            if (!double.TryParse(parts[nLast], NumberStyles.Float, CultureInfo.InvariantCulture, out double el)) continue;
-            if (!double.TryParse(parts[nLast - 1], NumberStyles.Float, CultureInfo.InvariantCulture, out double az)) continue;
-            string name = nLast >= 2 ? string.Join(' ', parts, 0, nLast - 1) : "";
-            list.Add(new AntennaAim { AzimuthDeg = az, ElevationDeg = el, Name = name });
+
+            // Detect legacy "name az el" by checking if parts[0] isn't a number — skip the
+            // leading name tokens until we hit a number.
+            int idx = 0;
+            while (idx < parts.Length && !double.TryParse(parts[idx], NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                idx++;
+            if (parts.Length - idx < 2) continue;
+
+            if (!double.TryParse(parts[idx],     NumberStyles.Float, CultureInfo.InvariantCulture, out double az)) continue;
+            if (!double.TryParse(parts[idx + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out double el)) continue;
+
+            string band = "L";
+            double gain = 50.0;
+            // Third token: if it's numeric, treat as gain (and band stays default). If non-
+            // numeric, it's the band name; optional fourth token then becomes the gain.
+            if (parts.Length > idx + 2)
+            {
+                string t3 = parts[idx + 2];
+                if (double.TryParse(t3, NumberStyles.Float, CultureInfo.InvariantCulture, out double t3num))
+                    gain = t3num;
+                else
+                {
+                    band = t3;
+                    if (parts.Length > idx + 3 &&
+                        double.TryParse(parts[idx + 3], NumberStyles.Float, CultureInfo.InvariantCulture, out double t4num))
+                        gain = t4num;
+                }
+            }
+            list.Add(new AntennaAim { AzimuthDeg = az, ElevationDeg = el, Band = band, GainDbi = gain });
         }
         return list;
     }
@@ -1182,6 +1496,8 @@ public partial class MainForm : Form
             double islGrandSum = 0;
             long islGrandCount = 0;
             double islGlobalMin = double.PositiveInfinity, islGlobalMax = 0;
+            double islDistGrandSum = 0;
+            double islDistGlobalMin = double.PositiveInfinity, islDistGlobalMax = 0;
             if (Nstats > N)
             {
                 var statsConnected = new bool[Nstats];
@@ -1192,6 +1508,9 @@ public partial class MainForm : Form
                 var statsIslMin = new double[Nstats];
                 var statsIslMax = new double[Nstats];
                 var statsIslMean = new double[Nstats];
+                var statsIslDistMin = new double[Nstats];
+                var statsIslDistMax = new double[Nstats];
+                var statsIslDistMean = new double[Nstats];
                 await Task.Run(() =>
                 {
                     Parallel.For(0, Nstats, new ParallelOptions { CancellationToken = ct }, i =>
@@ -1208,6 +1527,9 @@ public partial class MainForm : Form
                         statsIslMin[i] = statOut.IslMinRateBps;
                         statsIslMax[i] = statOut.IslMaxRateBps;
                         statsIslMean[i] = statOut.IslMeanRateBps;
+                        statsIslDistMin[i] = statOut.IslMinDistanceM;
+                        statsIslDistMax[i] = statOut.IslMaxDistanceM;
+                        statsIslDistMean[i] = statOut.IslMeanDistanceM;
                     });
                 }, ct);
                 for (int i = 0; i < Nstats; i++)
@@ -1225,6 +1547,9 @@ public partial class MainForm : Form
                         islGrandCount += statsIslCount[i];
                         if (statsIslMin[i] < islGlobalMin) islGlobalMin = statsIslMin[i];
                         if (statsIslMax[i] > islGlobalMax) islGlobalMax = statsIslMax[i];
+                        islDistGrandSum += statsIslDistMean[i] * statsIslCount[i];
+                        if (statsIslDistMin[i] < islDistGlobalMin) islDistGlobalMin = statsIslDistMin[i];
+                        if (statsIslDistMax[i] > islDistGlobalMax) islDistGlobalMax = statsIslDistMax[i];
                     }
                 }
             }
@@ -1254,9 +1579,13 @@ public partial class MainForm : Form
             string islLine = islGrandCount > 0
                 ? $"  ISL rates: min {Planner.FmtRate(islGlobalMin)} · avg {Planner.FmtRate(islGrandSum / islGrandCount)} · max {Planner.FmtRate(islGlobalMax)} ({islGrandCount} link-samples)"
                 : "  ISL rates: no working ISLs over the cycle";
+            string islDistLine = islGrandCount > 0
+                ? $"\r\n  ISL distance: min {islDistGlobalMin/1000:F1} km · avg {islDistGrandSum / islGrandCount / 1000:F1} km · max {islDistGlobalMax/1000:F1} km"
+                : "";
             _status.Text = $"animation: {N} frames over {durationSec/3600:F2} h in {sw.ElapsedMilliseconds} ms\r\n"
                          + $"  cycle stats: {statSummary}\r\n"
-                         + islLine;
+                         + islLine
+                         + islDistLine;
 
             // Cancellation supersedes the old _restartRequested mechanism: when settings change
             // mid-render, OnSettingsChangedForAnim cancels this CTS and kicks a new
@@ -1459,8 +1788,16 @@ public partial class MainForm : Form
         string powerLine = (o.GroundTxW > 0 || o.IslTxW > 0)
             ? $"power: ground {Planner.FmtWatts(o.GroundTxW)} tx → {Planner.FmtWatts(o.GroundDcW)} DC · ISL {Planner.FmtWatts(o.IslTxW)} tx → {Planner.FmtWatts(o.IslDcW)} DC · sat total {Planner.FmtWatts(o.SatTotalDcW)} DC\r\n"
             : "";
+        string islDistLine = o.IslCount > 0
+            ? $"ISL distance: min {o.IslMinDistanceM/1000:F1} km · avg {o.IslMeanDistanceM/1000:F1} km · max {o.IslMaxDistanceM/1000:F1} km\r\n"
+            : "";
+        string islRateLine = o.IslCount > 0
+            ? $"ISL rates: min {Planner.FmtRate(o.IslMinRateBps)} · avg {Planner.FmtRate(o.IslMeanRateBps)} · max {Planner.FmtRate(o.IslMaxRateBps)}\r\n"
+            : "";
         return $"render: {ms} ms · gain {o.GainDbi:F1} dBi · HPBW {o.BeamwidthDeg:F1}° · footprint {o.FootprintHalfAngleDeg:F1}° GC · noise {o.NoiseFloorDbm:F1} dBm\r\n"
              + $"links: ISLs {o.IslCount}, ground {o.GroundLinkCount}\r\n"
+             + islRateLine
+             + islDistLine
              + powerLine
              + pathLine;
     }
@@ -1481,7 +1818,8 @@ public partial class MainForm : Form
         IslAntennaDiameterM = src.IslAntennaDiameterM, IslFrequencyGHz = src.IslFrequencyGHz, IslBandwidthMHz = src.IslBandwidthMHz,
         IslGainDbiOverride = src.IslGainDbiOverride,
         IslTxPowerDbm = src.IslTxPowerDbm,
-        GroundAntennas = src.GroundAntennas.Select(a => new AntennaAim { Name = a.Name, AzimuthDeg = a.AzimuthDeg, ElevationDeg = a.ElevationDeg }).ToList(),
+        GroundAntennas = src.GroundAntennas.Select(a => new AntennaAim { AzimuthDeg = a.AzimuthDeg, ElevationDeg = a.ElevationDeg, Band = a.Band, GainDbi = a.GainDbi, TxPowerDbm = a.TxPowerDbm }).ToList(),
+        SelectedGroundAntennaIndex = src.SelectedGroundAntennaIndex,
         Metric = src.Metric, CoverageMode = src.CoverageMode,
         PathFromName = src.PathFromName, PathToName = src.PathToName,
         RequiredRateMbps = src.RequiredRateMbps, LatencyLimitSec = src.LatencyLimitSec,

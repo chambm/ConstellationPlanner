@@ -12,9 +12,10 @@ public sealed record BandModel(string Name, double FrequencyGHz, double Bandwidt
 
 public static class Catalogs
 {
-    /// <summary>Common RA dish antennas in RP-1. Diameters approximate; for precise numbers
-    /// read antennaDiameter from your installed RealAntennas\Parts\*.cfg.</summary>
-    public static readonly AntennaModel[] Antennas =
+    /// <summary>Built-in fallback dishes used when no <c>RealAntennas/Parts</c> scan has been
+    /// loaded. Diameters approximate. Replaced wholesale by
+    /// <see cref="ReplaceAntennaCatalog"/> once a GameData scan succeeds.</summary>
+    public static readonly AntennaModel[] DefaultAntennas =
     {
         new("Communotron HG-5",   0.40, "small fixed dish"),
         new("Communotron HG-48",  0.85, "medium dish"),
@@ -41,11 +42,9 @@ public static class Catalogs
         new("Ka",  31.850, 1024, 8),
     };
 
-    /// <summary>Omnidirectional vehicle antennas typical of RP-1 builds. Gain values are
-    /// representative referenceGain figures from RealAntennas\Parts\*.cfg patches:
-    /// whips and probe-integrated omnis cluster around 0.25-0.5 dBi; standard low-gain
-    /// vehicle omnis around 1-2 dBi; the higher-end helical/cone omnis around 3-3.8 dBi.</summary>
-    public static readonly AntennaModel[] OmniAntennas =
+    /// <summary>Built-in fallback omnis used when no GameData scan has loaded. Replaced
+    /// wholesale by <see cref="ReplaceAntennaCatalog"/>.</summary>
+    public static readonly AntennaModel[] DefaultOmniAntennas =
     {
         new("Probe-integrated", 0, "stock SM-25 / Mk1 cabin built-in", IsOmni: true, GainDbi: 0.25),
         new("Whip",             0, "Tantares Octans / SXTsciencenosecone class", IsOmni: true, GainDbi: 0.5),
@@ -55,10 +54,27 @@ public static class Catalogs
         new("Helical",          0, "Coatl ca_landv_omni / Quetzal", IsOmni: true, GainDbi: 3.8),
     };
 
+    /// <summary>Live dish list — defaults to <see cref="DefaultAntennas"/>; a successful
+    /// GameData scan overlays <see cref="ReplaceAntennaCatalog"/>.</summary>
+    public static IReadOnlyList<AntennaModel> Antennas { get; private set; } = DefaultAntennas;
+
+    /// <summary>Live omni list — same overlay semantics as <see cref="Antennas"/>.</summary>
+    public static IReadOnlyList<AntennaModel> OmniAntennas { get; private set; } = DefaultOmniAntennas;
+
+    /// <summary>Swap in loaded lists. Empty arguments revert to the built-in defaults so an
+    /// unsuccessful scan still leaves a working catalog.</summary>
+    public static void ReplaceAntennaCatalog(IReadOnlyList<AntennaModel>? dishes,
+                                              IReadOnlyList<AntennaModel>? omnis)
+    {
+        Antennas     = (dishes != null && dishes.Count > 0) ? dishes : DefaultAntennas;
+        OmniAntennas = (omnis  != null && omnis.Count  > 0) ? omnis  : DefaultOmniAntennas;
+    }
+
     public static AntennaModel FindAntenna(string name) =>
         Antennas.FirstOrDefault(a => a.Name == name)
         ?? OmniAntennas.FirstOrDefault(a => a.Name == name)
-        ?? Antennas.First(a => a.Name == "Communotron HG-61");
+        ?? Antennas.FirstOrDefault(a => a.Name == "Communotron HG-61")
+        ?? Antennas[0];
 
     public static BandModel FindBand(string name) =>
         Bands.FirstOrDefault(b => b.Name == name) ?? Bands.First(b => b.Name == "L");

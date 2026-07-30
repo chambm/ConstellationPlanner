@@ -21,7 +21,7 @@ var cfg = new PlannerInput
     GroundBandwidthMHz = 128,
     GroundAntennas = new()
     {
-        new AntennaAim { Name = "HG-61 nadir", AzimuthDeg = 270, ElevationDeg = 0 },
+        new AntennaAim { AzimuthDeg = 270, ElevationDeg = 0, Band = "L", GainDbi = 50 },
     },
     IslMode = IslMode.None,
     IslAntennaDiameterM = 1.22,
@@ -161,7 +161,7 @@ System.Threading.Tasks.Parallel.For(0, Nstats, i =>
         MinElevDeg = cfg.MinElevDeg, TechLevel = cfg.TechLevel,
         GroundAntennaDiameterM = cfg.GroundAntennaDiameterM, GroundFrequencyGHz = cfg.GroundFrequencyGHz, GroundBandwidthMHz = cfg.GroundBandwidthMHz,
         GroundStationGainDbi = cfg.GroundStationGainDbi, GroundStationTxPowerDbm = cfg.GroundStationTxPowerDbm,
-        GroundAntennas = cfg.GroundAntennas.Select(a => new AntennaAim { Name = a.Name, AzimuthDeg = a.AzimuthDeg, ElevationDeg = a.ElevationDeg }).ToList(),
+        GroundAntennas = cfg.GroundAntennas.Select(a => new AntennaAim { AzimuthDeg = a.AzimuthDeg, ElevationDeg = a.ElevationDeg, Band = a.Band, GainDbi = a.GainDbi, TxPowerDbm = a.TxPowerDbm }).ToList(),
         IslMode = cfg.IslMode,
         IslAntennaDiameterM = cfg.IslAntennaDiameterM, IslFrequencyGHz = cfg.IslFrequencyGHz, IslBandwidthMHz = cfg.IslBandwidthMHz,
         IslGainDbiOverride = cfg.IslGainDbiOverride,

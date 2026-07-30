@@ -5,12 +5,20 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace ConstellationPlanner.Cli;
 
 /// <summary>JSON-friendly antenna aim. Convention matches SatAntenna: ElevationDeg = 0 →
-/// nadir; AzimuthDeg measured from forward (velocity) toward orbit-normal "left".</summary>
+/// nadir; AzimuthDeg measured from forward (velocity) toward orbit-normal "left".
+/// <para><see cref="Band"/> and <see cref="GainDbi"/> are per-antenna (so a sat can carry
+/// multiple ground antennas on different bands). The name field is intentionally absent —
+/// it never affected calculations, only labels.</para></summary>
 public sealed class AntennaAim
 {
     public double AzimuthDeg { get; set; }
     public double ElevationDeg { get; set; }
-    public string Name { get; set; } = "";
+    public string Band { get; set; } = "L";
+    public double GainDbi { get; set; } = 50.0;
+    /// <summary>Sat-side TX power (dBm) for this specific antenna. 0 = inherit from the current
+    /// TechLevel's <see cref="TechLevelSpec.MaxPowerDbm"/>. Per-antenna so a sat can mix a
+    /// high-power C-band uplink with a low-power L-band ranging dish on the same bus.</summary>
+    public double TxPowerDbm { get; set; } = 0;
 }
 
 /// <summary>Inter-satellite-link configuration mode.</summary>
@@ -142,7 +150,13 @@ public sealed class PlannerInput
     public double IslGainDbiOverride { get; set; } = 0;
 
     // Antenna aiming — name is informational; az/el define the boresight.
-    public List<AntennaAim> GroundAntennas { get; set; } = new() { new AntennaAim { AzimuthDeg = 270, ElevationDeg = 0, Name = "nadir" } };
+    public List<AntennaAim> GroundAntennas { get; set; } = new() { new AntennaAim { AzimuthDeg = 270, ElevationDeg = 0, Band = "L", GainDbi = 50 } };
+
+    /// <summary>Which ground antenna's band drives the coverage heatmap + display caption.
+    /// Index into <see cref="GroundAntennas"/>. Set to -1 to fall back to legacy single-band
+    /// fields (GroundFrequencyGHz / GroundAntennaDiameterM). Clamped to a valid range at use
+    /// time so an out-of-range value just rolls back to the first antenna.</summary>
+    public int SelectedGroundAntennaIndex { get; set; } = 0;
 
     // Heatmap metric — what the colours represent. RxPower (dBm) or DataRate (bps).
     public HeatmapMetric Metric { get; set; } = HeatmapMetric.RxPower;
@@ -207,6 +221,12 @@ public sealed class PlannerOutput
     public double IslMinRateBps { get; set; }
     public double IslMaxRateBps { get; set; }
     public double IslMeanRateBps { get; set; }
+    /// <summary>Per-timestep min / max / mean of ISL endpoint-to-endpoint distance (m) for
+    /// links that pass the same rate-floor filter as the rate stats. Zero when no working
+    /// ISLs are present.</summary>
+    public double IslMinDistanceM { get; set; }
+    public double IslMaxDistanceM { get; set; }
+    public double IslMeanDistanceM { get; set; }
     public double FootprintHalfAngleDeg { get; set; }
     public double GainDbi { get; set; }
     public double BeamwidthDeg { get; set; }
@@ -470,24 +490,49 @@ public static class Planner
                 requiredEbN0Db: (float)tl.RequiredEbN0Db);
         }
 
-        // Coverage-side ground antenna (same as the standalone snapshot path) — used here only
-        // for Relay.Find's general-purpose ground antenna list (which is mostly irrelevant for
-        // multi-connection eval since each connection picks its own pathGroundAntennas, but the
-        // signature requires it).
-        var coverageGroundBudget = MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz, txPowerDbmOverride: cfg.GroundTxPowerDbm);
-        var groundAntennas = cfg.GroundAntennas.Select((a, i) =>
-            new SatAntenna(string.IsNullOrEmpty(a.Name) ? $"ground{i}" : a.Name,
-                           a.AzimuthDeg, a.ElevationDeg, coverageGroundBudget)).ToList();
+        // Each AntennaAim now carries its own band + sat-side gain + TX power, so we build one
+        // SatAntenna per line with its own LinkBudget. Different lines can be on different
+        // bands and different powers — the constellation can cover multiple frequencies from
+        // a single sat with mixed link classes.
+        SatAntenna BuildGroundAntenna(AntennaAim a, int idx, double otherEndGainDbi)
+        {
+            var bandSpec = Catalogs.FindBand(a.Band);
+            // Per-antenna TX power overrides the legacy vessel-wide value when non-zero.
+            double txPower = a.TxPowerDbm > 0 ? a.TxPowerDbm : cfg.GroundTxPowerDbm;
+            var budget = MakeBudget(diameterM: 0, bandSpec.FrequencyGHz, bandSpec.BandwidthMHz,
+                                     gainDbiOverride: a.GainDbi,
+                                     otherEndGainDbi: otherEndGainDbi,
+                                     txPowerDbmOverride: txPower);
+            return new SatAntenna($"ground{idx}-{a.Band}", a.AzimuthDeg, a.ElevationDeg, budget);
+        }
+
+        // Sentinel budget for an antenna whose band isn't supported at one or both path
+        // endpoints. We can't drop the antenna from the per-connection list — the boresight
+        // grid is indexed by the FULL antenna list, so dropping would mis-align indices and
+        // Relay.Find would read the wrong boresight for surviving antennas. Keep the slot but
+        // give it a budget so weak (-100 dBi each side) that Relay.Find's best-rx pick never
+        // chooses it.
+        SatAntenna BuildDisabledGroundAntenna(AntennaAim a, int idx)
+        {
+            var bandSpec = Catalogs.FindBand(a.Band);
+            var budget = MakeBudget(diameterM: 0, bandSpec.FrequencyGHz, bandSpec.BandwidthMHz,
+                                     gainDbiOverride: -100,
+                                     otherEndGainDbi: -100,
+                                     txPowerDbmOverride: 1);
+            return new SatAntenna($"ground{idx}-{a.Band}(unusable)", a.AzimuthDeg, a.ElevationDeg, budget);
+        }
+
+        // Coverage-side ground antennas — used here only for Relay.Find's general-purpose
+        // ground antenna list (mostly irrelevant for multi-connection eval since each
+        // connection picks its own pathGroundAntennas, but the signature requires it).
+        var groundAntennas = cfg.GroundAntennas
+            .Select((a, i) => BuildGroundAntenna(a, i, otherEndGainDbi: -1))
+            .ToList();
 
         // Per-connection path-side ground antennas tailored to the from/to station's catalog
-        // gain at this band+TL — same logic as the single-snapshot path in Render.
-        string band = cfg.GroundFrequencyGHz < 0.3 ? "VHF"
-                    : cfg.GroundFrequencyGHz < 1.0 ? "UHF"
-                    : cfg.GroundFrequencyGHz < 2.0 ? "L"
-                    : cfg.GroundFrequencyGHz < 4.0 ? "S"
-                    : cfg.GroundFrequencyGHz < 8.0 ? "C"
-                    : cfg.GroundFrequencyGHz < 12.0 ? "X"
-                    : cfg.GroundFrequencyGHz < 18.0 ? "Ku" : "Ka";
+        // gain at THIS antenna's band+TL. Each ground antenna's `pathGain` is looked up
+        // independently — a station that only has L-band antennas won't help an X-band sat
+        // antenna and vice versa, which is the correct routing behavior.
         var pathGroundAntennasPerConn = new List<List<SatAntenna>>(connections.Count);
         var ratePerConn = new double[connections.Count];
         var cat = StationAntennas;
@@ -495,17 +540,29 @@ public static class Planner
         {
             var (conn, rxIdx) = connections[c];
             ratePerConn[c] = conn.DataRateBps;
-            var fromAnt = cat.Get(conn.TxStation, band, cfg.TechLevel);
-            var toAnt   = cat.Get(conn.RxStations[rxIdx], band, cfg.TechLevel);
-            double pathGain = fromAnt.HasValue && toAnt.HasValue ? Math.Min(fromAnt.Value.GainDbi, toAnt.Value.GainDbi)
-                            : fromAnt.HasValue ? fromAnt.Value.GainDbi
-                            : toAnt.HasValue   ? toAnt.Value.GainDbi
-                            : cfg.GroundStationGainDbi;
-            var pathBudget = MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz,
-                                         otherEndGainDbi: pathGain, txPowerDbmOverride: cfg.GroundTxPowerDbm);
-            pathGroundAntennasPerConn.Add(cfg.GroundAntennas.Select((a, i) =>
-                new SatAntenna(string.IsNullOrEmpty(a.Name) ? $"ground{i}" : a.Name,
-                               a.AzimuthDeg, a.ElevationDeg, pathBudget)).ToList());
+            var perConnAntennas = new List<SatAntenna>(cfg.GroundAntennas.Count);
+            for (int i = 0; i < cfg.GroundAntennas.Count; i++)
+            {
+                var a = cfg.GroundAntennas[i];
+                bool txKnown = cat.Contains(conn.TxStation);
+                bool rxKnown = cat.Contains(conn.RxStations[rxIdx]);
+                var fromAnt = txKnown ? cat.Get(conn.TxStation, a.Band, cfg.TechLevel) : null;
+                var toAnt   = rxKnown ? cat.Get(conn.RxStations[rxIdx], a.Band, cfg.TechLevel) : null;
+                // Band-unsupported antennas keep their slot (boresight index alignment) but
+                // get a sentinel budget so Relay.Find never picks them — see comment on
+                // BuildDisabledGroundAntenna for why we don't just drop them.
+                if ((txKnown && !fromAnt.HasValue) || (rxKnown && !toAnt.HasValue))
+                {
+                    perConnAntennas.Add(BuildDisabledGroundAntenna(a, i));
+                    continue;
+                }
+                double pathGain = fromAnt.HasValue && toAnt.HasValue ? Math.Min(fromAnt.Value.GainDbi, toAnt.Value.GainDbi)
+                                : fromAnt.HasValue ? fromAnt.Value.GainDbi
+                                : toAnt.HasValue   ? toAnt.Value.GainDbi
+                                : cfg.GroundStationGainDbi;
+                perConnAntennas.Add(BuildGroundAntenna(a, i, pathGain));
+            }
+            pathGroundAntennasPerConn.Add(perConnAntennas);
         }
 
         var islBudget = MakeBudget(cfg.IslAntennaDiameterM, cfg.IslFrequencyGHz, cfg.IslBandwidthMHz,
@@ -701,8 +758,14 @@ public static class Planner
     /// back to whichever endpoint is catalogued, then to the global minimum across all catalog
     /// stations, then to null (caller uses symmetric sat-dish budget).</summary>
     static double? ResolveCoverageStationGain(PlannerInput cfg)
+        => ResolveCoverageStationGainAtBand(cfg, BandPrefixFor(cfg.GroundFrequencyGHz));
+
+    /// <summary>Band-explicit version of <see cref="ResolveCoverageStationGain"/> — used when
+    /// the coverage heatmap is keyed to a specific selected ground antenna rather than the
+    /// legacy vessel-wide frequency. Same fallback chain (path bottleneck → catalogued endpoint
+    /// → global minimum at this band → null).</summary>
+    static double? ResolveCoverageStationGainAtBand(PlannerInput cfg, string band)
     {
-        string band = BandPrefixFor(cfg.GroundFrequencyGHz);
         var fromAnt = !string.IsNullOrEmpty(cfg.PathFromName)
             ? StationAntennas.Get(cfg.PathFromName, band, cfg.TechLevel) : null;
         var toAnt = !string.IsNullOrEmpty(cfg.PathToName)
@@ -711,7 +774,6 @@ public static class Planner
             return Math.Min(fromAnt.Value.GainDbi, toAnt.Value.GainDbi);
         if (fromAnt.HasValue) return fromAnt.Value.GainDbi;
         if (toAnt.HasValue)   return toAnt.Value.GainDbi;
-        // Neither path endpoint has an antenna at this band — fall back to the global minimum.
         double? minGain = null;
         foreach (var name in StationAntennas.Stations)
         {
@@ -786,23 +848,109 @@ public static class Planner
         double? pathStationGainDbiNullable = ResolvePathStationGain(cfg);
         double pathStationGainDbi = pathStationGainDbiNullable ?? cfg.GroundStationGainDbi;
         bool pathBandUnsupported = pathStationGainDbiNullable == null;
-        // Heatmap coverage budget — receive-side uses the lowest catalog-station gain at this
-        // band so the colors mean "rate the worst-equipped real station could pick up". Falls
-        // back to the symmetric sat-dish-on-both-ends budget when no station has an antenna at
-        // the chosen band (e.g. UHF/VHF with default catalog).
-        double? coverageStationGainDbi = ResolveCoverageStationGain(cfg);
-        var coverageGroundBudget = coverageStationGainDbi.HasValue
-            ? MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz, otherEndGainDbi: coverageStationGainDbi.Value, txPowerDbmOverride: cfg.GroundTxPowerDbm)
-            : MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz, txPowerDbmOverride: cfg.GroundTxPowerDbm);
-        var pathGroundBudget     = MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz, otherEndGainDbi: pathStationGainDbi, txPowerDbmOverride: cfg.GroundTxPowerDbm);
+        // Heatmap coverage budget — keyed to a SINGLE selected ground antenna. The user picks
+        // which antenna's band/gain/power drive the heatmap colors via SelectedGroundAntennaIndex
+        // (set from the listbox in the GUI). A constellation can have multiple antennas per
+        // band; the visualization just shows one at a time so the user can flip between bands
+        // by clicking different antennas.
+        //
+        // If no antennas are configured we fall back to the legacy vessel-wide fields so the
+        // standalone CLI path (which doesn't set GroundAntennas) still produces something.
+        LinkBudget coverageGroundBudget;
+        double? coverageStationGainDbi;
+        if (cfg.GroundAntennas.Count > 0)
+        {
+            int selIdx = Math.Max(0, Math.Min(cfg.SelectedGroundAntennaIndex, cfg.GroundAntennas.Count - 1));
+            var sel = cfg.GroundAntennas[selIdx];
+            var selBand = Catalogs.FindBand(sel.Band);
+            coverageStationGainDbi = ResolveCoverageStationGainAtBand(cfg, sel.Band);
+            double txPower = sel.TxPowerDbm > 0 ? sel.TxPowerDbm : cfg.GroundTxPowerDbm;
+            coverageGroundBudget = coverageStationGainDbi.HasValue
+                ? MakeBudget(diameterM: 0, selBand.FrequencyGHz, selBand.BandwidthMHz,
+                              gainDbiOverride: sel.GainDbi, otherEndGainDbi: coverageStationGainDbi.Value,
+                              txPowerDbmOverride: txPower)
+                : MakeBudget(diameterM: 0, selBand.FrequencyGHz, selBand.BandwidthMHz,
+                              gainDbiOverride: sel.GainDbi, txPowerDbmOverride: txPower);
+        }
+        else
+        {
+            coverageStationGainDbi = ResolveCoverageStationGain(cfg);
+            coverageGroundBudget = coverageStationGainDbi.HasValue
+                ? MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz, otherEndGainDbi: coverageStationGainDbi.Value, txPowerDbmOverride: cfg.GroundTxPowerDbm)
+                : MakeBudget(cfg.GroundAntennaDiameterM, cfg.GroundFrequencyGHz, cfg.GroundBandwidthMHz, txPowerDbmOverride: cfg.GroundTxPowerDbm);
+        }
         var islBudget            = MakeBudget(cfg.IslAntennaDiameterM,    cfg.IslFrequencyGHz,    cfg.IslBandwidthMHz, cfg.IslGainDbiOverride, txPowerDbmOverride: cfg.IslTxPowerDbm);
 
-        var groundAntennas = cfg.GroundAntennas.Select((a, i) =>
-            new SatAntenna(string.IsNullOrEmpty(a.Name) ? $"ground{i}" : a.Name,
-                           a.AzimuthDeg, a.ElevationDeg, coverageGroundBudget)).ToList();
-        var pathGroundAntennas = cfg.GroundAntennas.Select((a, i) =>
-            new SatAntenna(string.IsNullOrEmpty(a.Name) ? $"ground{i}" : a.Name,
-                           a.AzimuthDeg, a.ElevationDeg, pathGroundBudget)).ToList();
+        // Per-antenna ground SatAntenna builders — each antenna carries its own band, sat-side
+        // gain, and TX power. Multiple ground antennas on the same sat can now cover different
+        // bands and power classes.
+        SatAntenna BuildGroundAntenna(AntennaAim a, int idx, double otherEndGainDbi)
+        {
+            var bandSpec = Catalogs.FindBand(a.Band);
+            double txPower = a.TxPowerDbm > 0 ? a.TxPowerDbm : cfg.GroundTxPowerDbm;
+            var budget = MakeBudget(diameterM: 0, bandSpec.FrequencyGHz, bandSpec.BandwidthMHz,
+                                     gainDbiOverride: a.GainDbi,
+                                     otherEndGainDbi: otherEndGainDbi,
+                                     txPowerDbmOverride: txPower);
+            return new SatAntenna($"ground{idx}-{a.Band}", a.AzimuthDeg, a.ElevationDeg, budget);
+        }
+
+        // Sentinel for band-unsupported antennas — keeps the list length consistent with the
+        // boresight grid (Relay.Find indexes the grid by per-list antenna index, so dropping
+        // would mis-align). Budget is too weak to ever win the best-rx pick.
+        SatAntenna BuildDisabledGroundAntenna(AntennaAim a, int idx)
+        {
+            var bandSpec = Catalogs.FindBand(a.Band);
+            var budget = MakeBudget(diameterM: 0, bandSpec.FrequencyGHz, bandSpec.BandwidthMHz,
+                                     gainDbiOverride: -100,
+                                     otherEndGainDbi: -100,
+                                     txPowerDbmOverride: 1);
+            return new SatAntenna($"ground{idx}-{a.Band}(unusable)", a.AzimuthDeg, a.ElevationDeg, budget);
+        }
+
+        // Per-antenna path-station gain lookup — returns null if the antenna's band isn't
+        // supported at one or both endpoints (so the caller can drop the antenna from the
+        // per-connection list). Falls back to cfg.GroundStationGainDbi only when neither
+        // endpoint is in the catalog at all.
+        double? PathStationGainAtBand(string bandName)
+        {
+            var cat = StationAntennas;
+            bool fromKnown = !string.IsNullOrEmpty(cfg.PathFromName) && cat.Contains(cfg.PathFromName);
+            bool toKnown   = !string.IsNullOrEmpty(cfg.PathToName)   && cat.Contains(cfg.PathToName);
+            var fa = fromKnown ? cat.Get(cfg.PathFromName, bandName, cfg.TechLevel) : null;
+            var ta = toKnown   ? cat.Get(cfg.PathToName,   bandName, cfg.TechLevel) : null;
+            if (fromKnown && !fa.HasValue) return null;     // path's TX station lacks this band
+            if (toKnown   && !ta.HasValue) return null;     // path's RX station lacks this band
+            if (fa.HasValue && ta.HasValue) return Math.Min(fa.Value.GainDbi, ta.Value.GainDbi);
+            if (fa.HasValue) return fa.Value.GainDbi;
+            if (ta.HasValue) return ta.Value.GainDbi;
+            return cfg.GroundStationGainDbi;
+        }
+
+        var groundAntennas = cfg.GroundAntennas
+            .Select((a, i) => BuildGroundAntenna(a, i, coverageStationGainDbi ?? cfg.GroundStationGainDbi))
+            .ToList();
+        // Index of the antenna whose coverage drives the heatmap + footprint render. -1 means
+        // "no selection" → fall back to showing all antennas (legacy behavior). With a valid
+        // selection we restrict heatmap/footprints to just that one antenna so the user can
+        // switch between bands by clicking different entries in the aim list.
+        int coverageSelIdx = (cfg.GroundAntennas.Count > 0)
+            ? Math.Max(0, Math.Min(cfg.SelectedGroundAntennaIndex, cfg.GroundAntennas.Count - 1))
+            : -1;
+        var coverageRenderAntennas = coverageSelIdx >= 0
+            ? new List<SatAntenna> { groundAntennas[coverageSelIdx] }
+            : groundAntennas;
+        // Match the multi-conn path: keep the per-connection list the SAME LENGTH as the full
+        // antenna list (so boresight indices align), substituting a sentinel budget for
+        // band-unsupported antennas.
+        var pathGroundAntennas = new List<SatAntenna>(cfg.GroundAntennas.Count);
+        for (int i = 0; i < cfg.GroundAntennas.Count; i++)
+        {
+            var a = cfg.GroundAntennas[i];
+            var g = PathStationGainAtBand(a.Band);
+            if (g.HasValue) pathGroundAntennas.Add(BuildGroundAntenna(a, i, g.Value));
+            else            pathGroundAntennas.Add(BuildDisabledGroundAntenna(a, i));
+        }
 
         // Derive ISL antenna list from mode. Omni = single omnidirectional antenna;
         // Directional = forward+aft at 45° elevation; None = empty.
@@ -916,6 +1064,7 @@ public static class Planner
                                                       EarthRadius, atmosphereMarginM: 50_000,
                                                       islTargets: islTargets);
                 double sumRate = 0, minRate = double.PositiveInfinity, maxRate = 0;
+                double sumDist = 0, minDist = double.PositiveInfinity, maxDist = 0;
                 int countNonZero = 0;
                 foreach (var l in islsFast)
                 {
@@ -925,12 +1074,18 @@ public static class Planner
                     sumRate += rate;
                     if (rate < minRate) minRate = rate;
                     if (rate > maxRate) maxRate = rate;
+                    sumDist += l.DistanceM;
+                    if (l.DistanceM < minDist) minDist = l.DistanceM;
+                    if (l.DistanceM > maxDist) maxDist = l.DistanceM;
                     countNonZero++;
                 }
                 fastOutput.IslCount = countNonZero;
                 fastOutput.IslMinRateBps  = countNonZero > 0 ? minRate : 0;
                 fastOutput.IslMaxRateBps  = countNonZero > 0 ? maxRate : 0;
                 fastOutput.IslMeanRateBps = countNonZero > 0 ? sumRate / countNonZero : 0;
+                fastOutput.IslMinDistanceM  = countNonZero > 0 ? minDist : 0;
+                fastOutput.IslMaxDistanceM  = countNonZero > 0 ? maxDist : 0;
+                fastOutput.IslMeanDistanceM = countNonZero > 0 ? sumDist / countNonZero : 0;
             }
             if (pathConfiguredFast && !pathBandUnsupported)
             {
@@ -962,7 +1117,7 @@ public static class Planner
                                      startTimeSec: instant ? cfg.TimeOffsetSec : 0,
                                      minElevationDeg: cfg.MinElevDeg,
                                      bodyRotationRateRadPerSec: EarthRotationRate,
-                                     groundAntennas: groundAntennas);
+                                     groundAntennas: coverageRenderAntennas);
 
         // Display range — choose data array + scale based on metric.
         double meanFrac = 0;
@@ -1074,13 +1229,17 @@ public static class Planner
         // perigee figure is the conservative one. (We could pass per-sat altitude but a single
         // representative number is fine for the legend.)
         double footprintHalfAngleDeg = Geometry.FootprintHalfAngleDeg(beamwidth, perigeeAltKm * 1000, EarthRadius);
-        // One footprint per (sat × ground antenna) — centered where each antenna's boresight
-        // ray actually hits the surface. Skipped when the boresight points above the horizon.
+        // One footprint per sat for the selected ground antenna only (or all antennas if
+        // there's no valid selection). Footprints render the −3 dB cone on the surface for
+        // the antenna whose band the user is currently visualizing — matches the heatmap
+        // semantics so the two layers stay consistent.
         var footprints = new List<Heatmap.Footprint>();
+        int footAStart = coverageSelIdx >= 0 ? coverageSelIdx : 0;
+        int footAEnd   = coverageSelIdx >= 0 ? coverageSelIdx : groundAntennas.Count - 1;
         for (int s = 0; s < satBfPositions.Count; s++)
         {
             var satPos = satBfPositions[s];
-            for (int a = 0; a < groundAntennas.Count; a++)
+            for (int a = footAStart; a <= footAEnd; a++)
             {
                 var hit = Geometry.RaySphereNearIntersect(satPos, groundBoresights[s, a], EarthRadius);
                 if (hit == null) continue;
@@ -1160,6 +1319,7 @@ public static class Planner
         // ISL rate distribution stats — same per-timestep summary the fast path computes.
         // Values feed the animation sweep's cycle-wide ISL min/max/avg display.
         double islSumRate = 0, islMinRate = double.PositiveInfinity, islMaxRate = 0;
+        double islSumDist = 0, islMinDist = double.PositiveInfinity, islMaxDist = 0;
         int islRateCount = 0;
         foreach (var l in isls)
         {
@@ -1169,6 +1329,9 @@ public static class Planner
             islSumRate += rate;
             if (rate < islMinRate) islMinRate = rate;
             if (rate > islMaxRate) islMaxRate = rate;
+            islSumDist += l.DistanceM;
+            if (l.DistanceM < islMinDist) islMinDist = l.DistanceM;
+            if (l.DistanceM > islMaxDist) islMaxDist = l.DistanceM;
             islRateCount++;
         }
 
@@ -1185,6 +1348,9 @@ public static class Planner
             IslMinRateBps = islRateCount > 0 ? islMinRate : 0,
             IslMaxRateBps = islRateCount > 0 ? islMaxRate : 0,
             IslMeanRateBps = islRateCount > 0 ? islSumRate / islRateCount : 0,
+            IslMinDistanceM = islRateCount > 0 ? islMinDist : 0,
+            IslMaxDistanceM = islRateCount > 0 ? islMaxDist : 0,
+            IslMeanDistanceM = islRateCount > 0 ? islSumDist / islRateCount : 0,
             GroundLinkCount = groundLinks.Count,
             GroundTxW = groundTxW,
             GroundDcW = groundDcW,

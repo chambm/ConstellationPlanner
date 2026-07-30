@@ -113,7 +113,11 @@ namespace ConstellationPlanner.Core
                     i++;
                     SkipInlineWs(s, ref i);
                     int vstart = i;
-                    while (i < s.Length && s[i] != '\n' && s[i] != '\r') i++;
+                    // Also stop at '}' so single-line MODULE blocks like
+                    //   %MODULE[X] { %key = 1.0 }
+                    // don't capture the closing brace into the value. Leaving '}' unconsumed
+                    // lets the outer recursion close the block correctly.
+                    while (i < s.Length && s[i] != '\n' && s[i] != '\r' && s[i] != '}') i++;
                     string v = s.Substring(vstart, i - vstart);
                     int comm = v.IndexOf("//");
                     if (comm >= 0) v = v.Substring(0, comm);

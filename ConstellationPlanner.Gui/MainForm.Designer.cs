@@ -38,6 +38,7 @@ partial class MainForm
     private System.Windows.Forms.Label _lblSkoposConnection;
     private System.Windows.Forms.ComboBox _skoposConnection;
     private System.Windows.Forms.Button _btnTestAllConnections;
+    private System.Windows.Forms.Button _btnOptimize;
     private System.Windows.Forms.GroupBox _grpRelayPath;
     private System.Windows.Forms.GroupBox _grpRender;
     private System.Windows.Forms.GroupBox _grpLayers;
@@ -81,7 +82,17 @@ partial class MainForm
     private System.Windows.Forms.Label _lblGroundInfoCaption;
     private System.Windows.Forms.Label _groundInfo;
 
-    private System.Windows.Forms.TextBox _groundAnts;
+    private System.Windows.Forms.TextBox _groundAnts;     // legacy, removed from layout
+    private System.Windows.Forms.NumericUpDown _groundAimAz;
+    private System.Windows.Forms.NumericUpDown _groundAimEl;
+    private System.Windows.Forms.Label _lblGroundAimAz;
+    private System.Windows.Forms.Label _lblGroundAimEl;
+    private System.Windows.Forms.Button _btnAddGroundAim;
+    private System.Windows.Forms.Button _btnApplyGroundAim;
+    private System.Windows.Forms.TableLayoutPanel _pnlGroundAimButtons;
+    private System.Windows.Forms.TableLayoutPanel _pnlConnButtons;
+    private System.Windows.Forms.ListBox _groundAimList;
+    private System.Windows.Forms.Button _btnRemoveGroundAim;
 
     private System.Windows.Forms.Label _lblIslMode;
     private System.Windows.Forms.ComboBox _islMode;
@@ -185,6 +196,16 @@ partial class MainForm
         this._groundInfo = new System.Windows.Forms.Label();
         this._grpGroundAimList = new System.Windows.Forms.GroupBox();
         this._groundAnts = new System.Windows.Forms.TextBox();
+        this._groundAimAz = new System.Windows.Forms.NumericUpDown();
+        this._groundAimEl = new System.Windows.Forms.NumericUpDown();
+        this._lblGroundAimAz = new System.Windows.Forms.Label();
+        this._lblGroundAimEl = new System.Windows.Forms.Label();
+        this._btnAddGroundAim = new System.Windows.Forms.Button();
+        this._btnApplyGroundAim = new System.Windows.Forms.Button();
+        this._pnlGroundAimButtons = new System.Windows.Forms.TableLayoutPanel();
+        this._pnlConnButtons = new System.Windows.Forms.TableLayoutPanel();
+        this._groundAimList = new System.Windows.Forms.ListBox();
+        this._btnRemoveGroundAim = new System.Windows.Forms.Button();
         this._grpIslAntennas = new System.Windows.Forms.GroupBox();
         this._tlpIslAntennas = new System.Windows.Forms.TableLayoutPanel();
         this._lblIslMode = new System.Windows.Forms.Label();
@@ -200,6 +221,7 @@ partial class MainForm
         this._lblSkoposConnection = new System.Windows.Forms.Label();
         this._skoposConnection = new System.Windows.Forms.ComboBox();
         this._btnTestAllConnections = new System.Windows.Forms.Button();
+        this._btnOptimize = new System.Windows.Forms.Button();
         this._grpRelayPath = new System.Windows.Forms.GroupBox();
         this._tlpRelayPath = new System.Windows.Forms.TableLayoutPanel();
         this._lblPathFrom = new System.Windows.Forms.Label();
@@ -267,6 +289,8 @@ partial class MainForm
         this._grpGroundAntennas.SuspendLayout();
         this._tlpGroundAntennas.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)(this._groundTxPower)).BeginInit();
+        ((System.ComponentModel.ISupportInitialize)(this._groundAimAz)).BeginInit();
+        ((System.ComponentModel.ISupportInitialize)(this._groundAimEl)).BeginInit();
         this._grpGroundAimList.SuspendLayout();
         this._grpIslAntennas.SuspendLayout();
         this._tlpIslAntennas.SuspendLayout();
@@ -306,8 +330,10 @@ partial class MainForm
         this._leftFlow.AutoScroll = true;
         this._leftFlow.Controls.Add(this._grpConstellation);
         this._leftFlow.Controls.Add(this._grpSatHardware);
+        // Ground antennas + aim list are consolidated into a single groupbox; the second
+        // (_grpGroundAimList) is no longer added to the left flow but kept in the field list
+        // for backward compatibility with any external references.
         this._leftFlow.Controls.Add(this._grpGroundAntennas);
-        this._leftFlow.Controls.Add(this._grpGroundAimList);
         this._leftFlow.Controls.Add(this._grpIslAntennas);
         this._leftFlow.Controls.Add(this._grpRelayPath);
         this._leftFlow.Controls.Add(this._grpRender);
@@ -728,11 +754,13 @@ partial class MainForm
         this._grpGroundAntennas.Margin = new System.Windows.Forms.Padding(3, 3, 3, 8);
         this._grpGroundAntennas.Name = "_grpGroundAntennas";
         this._grpGroundAntennas.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-        this._grpGroundAntennas.Size = new System.Drawing.Size(460, 175);
+        this._grpGroundAntennas.Size = new System.Drawing.Size(460, 360);
         this._grpGroundAntennas.TabStop = false;
-        this._grpGroundAntennas.Text = "Ground antennas";
+        this._grpGroundAntennas.Text = "Ground antennas (top = template for Add / Apply, list = configured)";
         //
-        // _tlpGroundAntennas
+        // _tlpGroundAntennas — single consolidated layout: template controls + Add/Apply row
+        // + configured-antennas listbox + Remove row. Listbox uses Percent(100) row style so
+        // it gets all the leftover height when the group resizes.
         //
         this._tlpGroundAntennas.ColumnCount = 2;
         this._tlpGroundAntennas.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 175F));
@@ -741,20 +769,103 @@ partial class MainForm
         this._tlpGroundAntennas.Controls.Add(this._groundAnt, 1, 0);
         this._tlpGroundAntennas.Controls.Add(this._lblGroundBand, 0, 1);
         this._tlpGroundAntennas.Controls.Add(this._groundBand, 1, 1);
-        this._tlpGroundAntennas.Controls.Add(this._lblGroundStationGain, 0, 2);
-        this._tlpGroundAntennas.Controls.Add(this._groundStationGain, 1, 2);
-        this._tlpGroundAntennas.Controls.Add(this._lblGroundTxPower, 0, 3);
-        this._tlpGroundAntennas.Controls.Add(this._groundTxPower, 1, 3);
-        this._tlpGroundAntennas.Controls.Add(this._lblGroundInfoCaption, 0, 4);
-        this._tlpGroundAntennas.Controls.Add(this._groundInfo, 1, 4);
+        this._tlpGroundAntennas.Controls.Add(this._lblGroundTxPower, 0, 2);
+        this._tlpGroundAntennas.Controls.Add(this._groundTxPower, 1, 2);
+        this._tlpGroundAntennas.Controls.Add(this._lblGroundAimAz, 0, 3);
+        this._tlpGroundAntennas.Controls.Add(this._groundAimAz, 1, 3);
+        this._tlpGroundAntennas.Controls.Add(this._lblGroundAimEl, 0, 4);
+        this._tlpGroundAntennas.Controls.Add(this._groundAimEl, 1, 4);
+        this._tlpGroundAntennas.Controls.Add(this._pnlGroundAimButtons, 0, 5);
+        this._tlpGroundAntennas.SetColumnSpan(this._pnlGroundAimButtons, 2);
+        this._tlpGroundAntennas.Controls.Add(this._groundAimList, 0, 6);
+        this._tlpGroundAntennas.SetColumnSpan(this._groundAimList, 2);
+        this._tlpGroundAntennas.Controls.Add(this._btnRemoveGroundAim, 0, 7);
+        this._tlpGroundAntennas.SetColumnSpan(this._btnRemoveGroundAim, 2);
         this._tlpGroundAntennas.Dock = System.Windows.Forms.DockStyle.Fill;
         this._tlpGroundAntennas.Name = "_tlpGroundAntennas";
-        this._tlpGroundAntennas.RowCount = 5;
+        this._tlpGroundAntennas.RowCount = 8;
+        // 0-5 + 7 = AutoSize (controls); 6 = Percent(100) so the listbox stretches with the group.
+        for (int _r = 0; _r < 6; _r++)
+            this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+        this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 100F));
         this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
-        this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
-        this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
-        this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
-        this._tlpGroundAntennas.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+        //
+        // _pnlGroundAimButtons — TLP with 2 equal-width cells, one button per cell. Avoids
+        // the WinForms Panel + Dock=Left/Right quirk where AutoSize panels collapse to zero
+        // width and the buttons render invisibly.
+        //
+        this._pnlGroundAimButtons.ColumnCount = 2;
+        this._pnlGroundAimButtons.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+        this._pnlGroundAimButtons.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+        this._pnlGroundAimButtons.RowCount = 1;
+        this._pnlGroundAimButtons.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+        this._pnlGroundAimButtons.Controls.Add(this._btnAddGroundAim, 0, 0);
+        this._pnlGroundAimButtons.Controls.Add(this._btnApplyGroundAim, 1, 0);
+        this._pnlGroundAimButtons.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._pnlGroundAimButtons.Margin = new System.Windows.Forms.Padding(0, 6, 0, 0);
+        this._pnlGroundAimButtons.Name = "_pnlGroundAimButtons";
+        this._pnlGroundAimButtons.AutoSize = true;
+        //
+        // _lblGroundAimAz
+        //
+        this._lblGroundAimAz.AutoSize = false;
+        this._lblGroundAimAz.Margin = new System.Windows.Forms.Padding(0, 4, 4, 0);
+        this._lblGroundAimAz.Name = "_lblGroundAimAz";
+        this._lblGroundAimAz.Size = new System.Drawing.Size(175, 24);
+        this._lblGroundAimAz.Text = "Aim az° (0=fwd, 270=left)";
+        this._lblGroundAimAz.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+        //
+        // _groundAimAz
+        //
+        this._groundAimAz.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+        this._groundAimAz.DecimalPlaces = 1;
+        this._groundAimAz.Increment = new decimal(new int[] { 5, 0, 0, 0 });
+        this._groundAimAz.Margin = new System.Windows.Forms.Padding(0, 2, 0, 0);
+        this._groundAimAz.Maximum = new decimal(new int[] { 360, 0, 0, 0 });
+        this._groundAimAz.Minimum = new decimal(new int[] { 0, 0, 0, 0 });
+        this._groundAimAz.Name = "_groundAimAz";
+        this._groundAimAz.Size = new System.Drawing.Size(260, 23);
+        this._groundAimAz.Value = new decimal(new int[] { 270, 0, 0, 0 });
+        //
+        // _lblGroundAimEl
+        //
+        this._lblGroundAimEl.AutoSize = false;
+        this._lblGroundAimEl.Margin = new System.Windows.Forms.Padding(0, 4, 4, 0);
+        this._lblGroundAimEl.Name = "_lblGroundAimEl";
+        this._lblGroundAimEl.Size = new System.Drawing.Size(175, 24);
+        this._lblGroundAimEl.Text = "Aim el° (0=nadir → body)";
+        this._lblGroundAimEl.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+        //
+        // _groundAimEl
+        //
+        this._groundAimEl.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+        this._groundAimEl.DecimalPlaces = 1;
+        this._groundAimEl.Increment = new decimal(new int[] { 1, 0, 0, 0 });
+        this._groundAimEl.Margin = new System.Windows.Forms.Padding(0, 2, 0, 0);
+        this._groundAimEl.Maximum = 90M;
+        this._groundAimEl.Minimum = -90M;
+        this._groundAimEl.Name = "_groundAimEl";
+        this._groundAimEl.Size = new System.Drawing.Size(260, 23);
+        this._groundAimEl.Value = new decimal(new int[] { 0, 0, 0, 0 });
+        //
+        // _btnAddGroundAim — fills left cell of _pnlGroundAimButtons
+        //
+        this._btnAddGroundAim.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnAddGroundAim.Margin = new System.Windows.Forms.Padding(0, 0, 4, 0);
+        this._btnAddGroundAim.Name = "_btnAddGroundAim";
+        this._btnAddGroundAim.Height = 26;
+        this._btnAddGroundAim.Text = "Add ↓";
+        this._btnAddGroundAim.UseVisualStyleBackColor = true;
+        //
+        // _btnApplyGroundAim — fills right cell. Mutates the selected aim-list entry using the
+        // current dropdown / spinner values instead of appending.
+        //
+        this._btnApplyGroundAim.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnApplyGroundAim.Margin = new System.Windows.Forms.Padding(4, 0, 0, 0);
+        this._btnApplyGroundAim.Name = "_btnApplyGroundAim";
+        this._btnApplyGroundAim.Height = 26;
+        this._btnApplyGroundAim.Text = "Apply to selected ↻";
+        this._btnApplyGroundAim.UseVisualStyleBackColor = true;
         //
         // _lblGroundAnt
         //
@@ -851,31 +962,33 @@ partial class MainForm
         this._groundInfo.Size = new System.Drawing.Size(260, 22);
         this._groundInfo.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
         //
-        // _grpGroundAimList
+        // _grpGroundAimList — kept allocated for backward compatibility but no longer added
+        // to the layout. Its contents (listbox + remove button) live in _tlpGroundAntennas now.
         //
-        this._grpGroundAimList.Controls.Add(this._groundAnts);
-        this._grpGroundAimList.Margin = new System.Windows.Forms.Padding(3, 3, 3, 8);
         this._grpGroundAimList.Name = "_grpGroundAimList";
-        this._grpGroundAimList.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-        this._grpGroundAimList.Size = new System.Drawing.Size(460, 130);
-        this._grpGroundAimList.TabStop = false;
-        this._grpGroundAimList.Text = "Ground aim list (name az° el° per line)";
+        this._grpGroundAimList.Text = "Ground aim list (deprecated container)";
         //
-        // _groundAnts
+        // _btnRemoveGroundAim — bottom row of the consolidated TLP. Dock=Fill so it spans
+        // the full row width (col span = 2). Fixed height keeps the listbox flexible.
         //
-        this._groundAnts.AcceptsReturn = true;
-        this._groundAnts.Anchor = System.Windows.Forms.AnchorStyles.Top
-                                | System.Windows.Forms.AnchorStyles.Left
-                                | System.Windows.Forms.AnchorStyles.Right
-                                | System.Windows.Forms.AnchorStyles.Bottom;
-        this._groundAnts.Font = new System.Drawing.Font("Consolas", 9F);
-        this._groundAnts.Location = new System.Drawing.Point(8, 24);
-        this._groundAnts.Multiline = true;
-        this._groundAnts.Name = "_groundAnts";
-        this._groundAnts.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-        this._groundAnts.Size = new System.Drawing.Size(444, 90);
-        this._groundAnts.Text = "nadir 270 0";
-        this._groundAnts.WordWrap = false;
+        this._btnRemoveGroundAim.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnRemoveGroundAim.Height = 26;
+        this._btnRemoveGroundAim.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
+        this._btnRemoveGroundAim.Name = "_btnRemoveGroundAim";
+        this._btnRemoveGroundAim.Text = "Remove selected";
+        this._btnRemoveGroundAim.UseVisualStyleBackColor = true;
+        //
+        // _groundAimList — listbox of configured antennas. Dock=Fill within its TLP cell;
+        // the cell's row is Percent(100) so the listbox grows with the group.
+        //
+        this._groundAimList.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._groundAimList.Font = new System.Drawing.Font("Consolas", 9F);
+        this._groundAimList.FormattingEnabled = true;
+        this._groundAimList.IntegralHeight = false;
+        this._groundAimList.Margin = new System.Windows.Forms.Padding(0, 6, 0, 0);
+        this._groundAimList.MinimumSize = new System.Drawing.Size(0, 100);
+        this._groundAimList.Name = "_groundAimList";
+        this._groundAimList.SelectionMode = System.Windows.Forms.SelectionMode.One;
         //
         // _grpIslAntennas
         //
@@ -1009,7 +1122,7 @@ partial class MainForm
         this._grpRelayPath.Margin = new System.Windows.Forms.Padding(3, 3, 3, 8);
         this._grpRelayPath.Name = "_grpRelayPath";
         this._grpRelayPath.Padding = new System.Windows.Forms.Padding(8, 8, 8, 8);
-        this._grpRelayPath.Size = new System.Drawing.Size(460, 200);
+        this._grpRelayPath.Size = new System.Drawing.Size(460, 205);
         this._grpRelayPath.TabStop = false;
         this._grpRelayPath.Text = "Relay path";
         //
@@ -1028,21 +1141,46 @@ partial class MainForm
         this._tlpRelayPath.Controls.Add(this._requiredRate, 1, 3);
         this._tlpRelayPath.Controls.Add(this._lblLatencyLimit, 0, 4);
         this._tlpRelayPath.Controls.Add(this._latencyLimit, 1, 4);
-        this._tlpRelayPath.Controls.Add(this._btnTestAllConnections, 1, 5);
+        this._tlpRelayPath.Controls.Add(this._pnlConnButtons, 0, 5);
+        this._tlpRelayPath.SetColumnSpan(this._pnlConnButtons, 2);
         this._tlpRelayPath.Dock = System.Windows.Forms.DockStyle.Fill;
         this._tlpRelayPath.Name = "_tlpRelayPath";
         this._tlpRelayPath.RowCount = 6;
         for (int _r = 0; _r < 6; _r++)
             this._tlpRelayPath.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
         //
-        // _btnTestAllConnections
+        // _pnlConnButtons — Test-all + Optimize side-by-side in a 2-column TLP. Same pattern
+        // as _pnlGroundAimButtons (Panel + Dock=Left/Right doesn't reliably display in WinForms).
         //
-        this._btnTestAllConnections.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-        this._btnTestAllConnections.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
+        this._pnlConnButtons.ColumnCount = 2;
+        this._pnlConnButtons.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+        this._pnlConnButtons.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+        this._pnlConnButtons.RowCount = 1;
+        this._pnlConnButtons.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
+        this._pnlConnButtons.Controls.Add(this._btnTestAllConnections, 0, 0);
+        this._pnlConnButtons.Controls.Add(this._btnOptimize, 1, 0);
+        this._pnlConnButtons.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._pnlConnButtons.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
+        this._pnlConnButtons.Name = "_pnlConnButtons";
+        this._pnlConnButtons.AutoSize = true;
+        //
+        // _btnTestAllConnections — fills left cell. Trimmed text to fit half-width.
+        //
+        this._btnTestAllConnections.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnTestAllConnections.Margin = new System.Windows.Forms.Padding(0, 0, 4, 0);
         this._btnTestAllConnections.Name = "_btnTestAllConnections";
-        this._btnTestAllConnections.Size = new System.Drawing.Size(260, 26);
-        this._btnTestAllConnections.Text = "Test all Skopos connections (multi-conn capacity)";
+        this._btnTestAllConnections.Height = 26;
+        this._btnTestAllConnections.Text = "Test all Skopos connections";
         this._btnTestAllConnections.UseVisualStyleBackColor = true;
+        //
+        // _btnOptimize — fills right cell.
+        //
+        this._btnOptimize.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnOptimize.Margin = new System.Windows.Forms.Padding(4, 0, 0, 0);
+        this._btnOptimize.Name = "_btnOptimize";
+        this._btnOptimize.Height = 26;
+        this._btnOptimize.Text = "Optimize constellation…";
+        this._btnOptimize.UseVisualStyleBackColor = true;
         //
         // _lblSkoposConnection
         //
@@ -1440,6 +1578,8 @@ partial class MainForm
         this._grpGroundAimList.ResumeLayout(false);
         this._grpGroundAimList.PerformLayout();
         ((System.ComponentModel.ISupportInitialize)(this._groundTxPower)).EndInit();
+        ((System.ComponentModel.ISupportInitialize)(this._groundAimAz)).EndInit();
+        ((System.ComponentModel.ISupportInitialize)(this._groundAimEl)).EndInit();
         this._tlpGroundAntennas.ResumeLayout(false);
         this._grpGroundAntennas.ResumeLayout(false);
         ((System.ComponentModel.ISupportInitialize)(this._techLevel)).EndInit();
