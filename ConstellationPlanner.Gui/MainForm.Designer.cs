@@ -805,6 +805,10 @@ partial class MainForm
         this._pnlGroundAimButtons.Margin = new System.Windows.Forms.Padding(0, 6, 0, 0);
         this._pnlGroundAimButtons.Name = "_pnlGroundAimButtons";
         this._pnlGroundAimButtons.AutoSize = true;
+        // GrowAndShrink is required: Panel's default AutoSizeMode is GrowOnly, which floors the
+        // panel at its construction-time Panel.DefaultSize (200x100) — the row would then be
+        // 100px tall and the buttons inside would stretch to fill it.
+        this._pnlGroundAimButtons.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
         //
         // _lblGroundAimAz
         //
@@ -848,22 +852,24 @@ partial class MainForm
         this._groundAimEl.Size = new System.Drawing.Size(260, 23);
         this._groundAimEl.Value = new decimal(new int[] { 0, 0, 0, 0 });
         //
-        // _btnAddGroundAim — fills left cell of _pnlGroundAimButtons
+        // _btnAddGroundAim — fills left cell of _pnlGroundAimButtons. Anchored L+R rather than
+        // Dock=Fill so the explicit height is honoured (Dock overrides Size) while the width
+        // still tracks the 50% column. Same idiom as the spinners/combos above.
         //
-        this._btnAddGroundAim.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnAddGroundAim.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
         this._btnAddGroundAim.Margin = new System.Windows.Forms.Padding(0, 0, 4, 0);
         this._btnAddGroundAim.Name = "_btnAddGroundAim";
-        this._btnAddGroundAim.Height = 26;
+        this._btnAddGroundAim.Size = new System.Drawing.Size(120, 26);
         this._btnAddGroundAim.Text = "Add ↓";
         this._btnAddGroundAim.UseVisualStyleBackColor = true;
         //
         // _btnApplyGroundAim — fills right cell. Mutates the selected aim-list entry using the
         // current dropdown / spinner values instead of appending.
         //
-        this._btnApplyGroundAim.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnApplyGroundAim.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
         this._btnApplyGroundAim.Margin = new System.Windows.Forms.Padding(4, 0, 0, 0);
         this._btnApplyGroundAim.Name = "_btnApplyGroundAim";
-        this._btnApplyGroundAim.Height = 26;
+        this._btnApplyGroundAim.Size = new System.Drawing.Size(120, 26);
         this._btnApplyGroundAim.Text = "Apply to selected ↻";
         this._btnApplyGroundAim.UseVisualStyleBackColor = true;
         //
@@ -1163,22 +1169,24 @@ partial class MainForm
         this._pnlConnButtons.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
         this._pnlConnButtons.Name = "_pnlConnButtons";
         this._pnlConnButtons.AutoSize = true;
+        // See _pnlGroundAimButtons — GrowOnly would floor this at Panel.DefaultSize's 100px.
+        this._pnlConnButtons.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
         //
         // _btnTestAllConnections — fills left cell. Trimmed text to fit half-width.
         //
-        this._btnTestAllConnections.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnTestAllConnections.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
         this._btnTestAllConnections.Margin = new System.Windows.Forms.Padding(0, 0, 4, 0);
         this._btnTestAllConnections.Name = "_btnTestAllConnections";
-        this._btnTestAllConnections.Height = 26;
+        this._btnTestAllConnections.Size = new System.Drawing.Size(120, 26);
         this._btnTestAllConnections.Text = "Test all Skopos connections";
         this._btnTestAllConnections.UseVisualStyleBackColor = true;
         //
         // _btnOptimize — fills right cell.
         //
-        this._btnOptimize.Dock = System.Windows.Forms.DockStyle.Fill;
+        this._btnOptimize.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
         this._btnOptimize.Margin = new System.Windows.Forms.Padding(4, 0, 0, 0);
         this._btnOptimize.Name = "_btnOptimize";
-        this._btnOptimize.Height = 26;
+        this._btnOptimize.Size = new System.Drawing.Size(120, 26);
         this._btnOptimize.Text = "Optimize constellation…";
         this._btnOptimize.UseVisualStyleBackColor = true;
         //
