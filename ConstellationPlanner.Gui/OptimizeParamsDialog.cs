@@ -118,7 +118,10 @@ public sealed class OptimizeParamsDialog : Form
         // Orbit type row spans all 5 columns
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         grid.Controls.Add(MakeNameLabel("Orbit type:"), 0, row);
-        var orbPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
+        // AutoSizeMode is mandatory on every AutoSize panel here: FlowLayoutPanel inherits
+        // Panel's GrowOnly default, which floors it at Panel.DefaultSize (200x100) — the
+        // AutoSize row would then be 100px tall regardless of the controls inside.
+        var orbPanel = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
         orbPanel.Controls.AddRange(new Control[] { _orbWalkerCircular, _orbWalkerStar, _orbMolniya, _orbTundra, _orbCustom });
         grid.Controls.Add(orbPanel, 1, row);
         grid.SetColumnSpan(orbPanel, 4);
@@ -146,7 +149,7 @@ public sealed class OptimizeParamsDialog : Form
 
         // Quick-set buttons
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var quickPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 8, 0, 0) };
+        var quickPanel = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 8, 0, 0) };
         var btnLockAll = new Button { Text = "Lock all to current", AutoSize = true, Margin = new Padding(0, 0, 6, 0) };
         var btnOpenAll = new Button { Text = "Open all ranges",     AutoSize = true, Margin = new Padding(0, 0, 6, 0) };
         btnLockAll.Click += (s, e) => ApplyToControls(OptimizerSearchSpace.LockedToBaseline(_baseline));
@@ -159,7 +162,7 @@ public sealed class OptimizeParamsDialog : Form
 
         // Trial / samples row
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var budgetPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 8, 0, 0) };
+        var budgetPanel = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 8, 0, 0) };
         budgetPanel.Controls.Add(new Label { Text = "Trials:", AutoSize = true, Margin = new Padding(0, 8, 4, 0) });
         budgetPanel.Controls.Add(_trials);
         budgetPanel.Controls.Add(new Label { Text = "Samples/trial:", AutoSize = true, Margin = new Padding(16, 8, 4, 0) });
@@ -170,7 +173,9 @@ public sealed class OptimizeParamsDialog : Form
 
         // OK / Cancel
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var okPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
+        // Dock=Fill is deliberate here — RightToLeft flow needs the full row width to push the
+        // buttons to the right edge. GrowAndShrink keeps the row from inheriting the 100px floor.
+        var okPanel = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
         _okBtn        = new Button { Text = "OK",     Width = 90, DialogResult = DialogResult.OK,     Margin = new Padding(6) };
         var cancelBtn = new Button { Text = "Cancel", Width = 90, DialogResult = DialogResult.Cancel, Margin = new Padding(6) };
         okPanel.Controls.Add(_okBtn);

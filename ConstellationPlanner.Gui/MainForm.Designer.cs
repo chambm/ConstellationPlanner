@@ -977,8 +977,8 @@ partial class MainForm
         // _btnRemoveGroundAim — bottom row of the consolidated TLP. Dock=Fill so it spans
         // the full row width (col span = 2). Fixed height keeps the listbox flexible.
         //
-        this._btnRemoveGroundAim.Dock = System.Windows.Forms.DockStyle.Fill;
-        this._btnRemoveGroundAim.Height = 26;
+        this._btnRemoveGroundAim.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+        this._btnRemoveGroundAim.Size = new System.Drawing.Size(120, 26);
         this._btnRemoveGroundAim.Margin = new System.Windows.Forms.Padding(0, 4, 0, 0);
         this._btnRemoveGroundAim.Name = "_btnRemoveGroundAim";
         this._btnRemoveGroundAim.Text = "Remove selected";
